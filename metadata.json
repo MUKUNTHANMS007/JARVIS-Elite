@@ -1,0 +1,5 @@
+{
+  "name": "JARVIS Core Interface",
+  "description": "A minimalist, editorial-style interface for the JARVIS autonomous intelligence shell.",
+  "requestFramePermissions": []
+}

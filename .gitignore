@@ -1,0 +1,22 @@
+node_modules/
+**/node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+
+# Neural Cache & Python
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+**/.venv/
+backend/.venv/
+env/
+venv/
+*.pdb
+*.swp

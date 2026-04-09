@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+package jarvis.protocol;
+
+message Telemetry {
+    float cpu_percent = 1;
+    float ram_percent = 2;
+    float mood_score = 3;
+    bool is_online = 4;
+}
+
+message DashboardMetrics {
+    int32 unread_mail = 1;
+    string spotify_track = 2;
+    int32 reminder_count = 3;
+    string leetcode_status_json = 4; // Using JSON string for complex objects
+    string github_pulse_json = 5;
+}
+
+message ProactiveAlert {
+    string id = 1;
+    string type = 2;
+    string title = 3;
+    string message = 4;
+    double timestamp = 5;
+    string priority = 6;
+}
+
+enum AgentState {
+    IDLE = 0;
+    THINKING = 1;
+    SPEAKING = 2;
+    LISTENING = 3;
+    TOOL_EXECUTING = 4;
+}
+
+message NeuralPacket {
+    string type = 1;
+    double timestamp = 2;
+    AgentState state = 3;
+    Telemetry telemetry = 4;
+    DashboardMetrics dashboard = 5;
+    string active_tool = 6;
+    ProactiveAlert alert = 7;
+}
