@@ -14,7 +14,7 @@ class CalendarEvent(BaseModel):
     description: Optional[str] = None
     category: Optional[str] = "Task"
 
-@router.get("/api/calendar")
+@router.get("/")
 async def get_calendar(user_id: str = "JARVIS_ADMIN"):
     """Fetches accelerated calendar events for the dashboard."""
     try:
@@ -29,7 +29,7 @@ async def get_calendar(user_id: str = "JARVIS_ADMIN"):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/api/calendar")
+@router.post("/")
 async def add_event(event: CalendarEvent, user_id: str = "JARVIS_ADMIN"):
     """Adds a new calendar event and proactively refreshes the cache."""
     try:
@@ -52,7 +52,7 @@ async def add_event(event: CalendarEvent, user_id: str = "JARVIS_ADMIN"):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.delete("/api/calendar/{event_id}")
+@router.delete("/{event_id}")
 async def delete_event(event_id: str, user_id: str = "JARVIS_ADMIN"):
     """Deletes an event and purges it from the cache instantly."""
     try:

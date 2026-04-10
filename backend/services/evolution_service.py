@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 from agent.memory import supabase, init_db
 from agent.core import groq_client
 from services.scheduler_service import get_today_scheduled_problem
+from services.cache_service import update_intelligence
 
 async def get_supabase():
     global supabase
@@ -132,6 +133,9 @@ async def verify_evolution_solution(problem_id: str, user_code: str, language: s
                     "language": language,
                     "xp_gained": result.get("xp_gain", 12)
                 }).execute()
+                
+                # REFRESH HUB: Ensure dashboard reflects new evolution state instantly
+                update_intelligence("skill_mastery_refresh", datetime.utcnow().isoformat())
 
         return result
     except Exception as e:

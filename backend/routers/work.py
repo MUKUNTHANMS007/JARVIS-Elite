@@ -4,7 +4,7 @@ import psutil
 from github import Github
 from datetime import datetime
 
-router = APIRouter(prefix="/api/work")
+router = APIRouter()
 
 @router.get("/github")
 async def github_activity():

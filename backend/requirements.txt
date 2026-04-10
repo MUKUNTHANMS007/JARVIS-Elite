@@ -23,6 +23,7 @@ httpx
 supabase
 psycopg2-binary
 sqlalchemy
-protobuf
+protobuf>=5.26.1,<6
 grpcio-tools
 celery
+faster-whisper

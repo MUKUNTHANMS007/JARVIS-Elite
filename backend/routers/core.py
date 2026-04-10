@@ -8,7 +8,7 @@ from tools.spotify_tool import get_current_playback_info, pause_spotify
 from services.cache_service import INTELLIGENCE_HUB
 from datetime import datetime, timezone
 
-router = APIRouter(prefix="/api/core")
+router = APIRouter()
 
 async def safe_fetch(func, *args, default=None, **kwargs):
     """Utility to prevent one failing tool from crashing the whole dashboard."""
@@ -102,3 +102,28 @@ async def get_core_dashboard_stats(user_id: str = "JARVIS_ADMIN"):
 async def pause_spotify_playback():
     """Direct-path endpoint for 'Auto-Duck' functionality."""
     return await safe_fetch(pause_spotify, default="Failed to pause")
+@router.post("/focus")
+async def start_focus_routine(user_id: str = "JARVIS_ADMIN"):
+    """
+    Initializes the morning focus routine.
+    Fetches focus tasks and prepares a verbal briefing.
+    """
+    focus_stats = await get_today_focus_db()
+    
+    # Construct a high-fidelity greeting
+    now = datetime.now()
+    hour = now.hour
+    greeting = "Good evening" if hour >= 18 else "Good afternoon" if hour >= 12 else "Good morning"
+    
+    # Check for Batman Mode
+    is_batman = INTELLIGENCE_HUB.get(f"batman_mode_{user_id}", False)
+    if is_batman:
+        briefing = f"Good evening, Master Wayne. The Batcomputer is initialized. Gotham requires your attention. Your focus for tonight is: {focus_stats.get('task', 'maintaining the mission')}."
+    else:
+        briefing = f"{greeting}, Sir. I've initialized the neural core. Your focus for today is logged as: {focus_stats.get('task', 'unassigned')}. Ready for your instruction."
+        
+    return {
+        "status": "initialized",
+        "audio_briefing": briefing,
+        "focus_data": focus_stats
+    }

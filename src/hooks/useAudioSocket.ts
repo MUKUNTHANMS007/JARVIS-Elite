@@ -1,252 +1,213 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback } from "react";
+import { useJarvisAudio } from "./useJarvisAudio";
 
-export function useAudioSocket(url: string) {
-  const [messages, setMessages] = useState<{ role: 'user' | 'agent', content: string }[]>([]);
+type MessageType = "TRANSCRIPTION" | "TEXT_CHUNK" | "TURN_START" | "TURN_COMPLETE" | "ERROR" | "PING";
+
+interface JarvisMessage {
+  role: "user" | "assistant";
+  content: string;
+  timestamp: number;
+}
+
+interface UseJarvisSocketReturn {
+  messages: JarvisMessage[];
+  isConnected: boolean;
+  isRecording: boolean;
+  isThinking: boolean;
+  isSpeaking: boolean;
+  mood: string;
+  setIsThinking: (val: boolean) => void;
+  startRecording: (imageFrame?: string | null) => Promise<void>;
+  stopRecording: () => void;
+  sendTextMessage: (text: string, image?: string | null) => void;
+  reconnect: () => void;
+  clearMessages: () => void;
+}
+
+export function useAudioSocket(url: string): UseJarvisSocketReturn {
+  const ws = useRef<WebSocket | null>(null);
+  const mediaRecorder = useRef<MediaRecorder | null>(null);
+  const retryCount = useRef(0);
+  const retryTimer = useRef<number | undefined>(undefined);
+  const pingTimer = useRef<number | undefined>(undefined);
+  const currentAssistantMsg = useRef<string>("");
+
+  const [messages, setMessages] = useState<JarvisMessage[]>([]);
   const [isConnected, setIsConnected] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
-  const [mood, setMood] = useState<'normal' | 'stressed'>('normal');
+  const { playRawChunk, initAudio, isSpeaking: isWorkletSpeaking } = useJarvisAudio();
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [mood, setMood] = useState("normal");
 
-  const socketRef = useRef<WebSocket | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const activeStreamRef = useRef<MediaStream | null>(null);
-  const reconnectCountRef = useRef(0);
-  const MAX_RECONNECT_ATTEMPTS = 5;
-  const RECONNECT_INTERVAL = 3000;
-  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
-  
-  // Audio Queue States
-  const audioQueueRef = useRef<Blob[]>([]);
-  const isPlayingRef = useRef(false);
+  // Sync isSpeaking with the high-priority thread state
+  useEffect(() => {
+    setIsSpeaking(isWorkletSpeaking);
+  }, [isWorkletSpeaking]);
 
-  // --- 1. CLEAN HARDWARE MANAGEMENT ---
-  const stopHardware = useCallback(() => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      try { mediaRecorderRef.current.stop(); } catch (e) {}
-    }
-    if (activeStreamRef.current) {
-        activeStreamRef.current.getTracks().forEach(t => t.stop());
-        activeStreamRef.current = null;
-    }
-    audioQueueRef.current = [];
-    isPlayingRef.current = false;
-    currentAudioRef.current = null;
-    setIsRecording(false);
-  }, []);
+  const MAX_RETRIES = 8;
 
-  // --- 2. GAPLESS ACOUSTIC QUEUE ---
-  const processQueue = useCallback(() => {
-    if (audioQueueRef.current.length === 0) {
-      isPlayingRef.current = false;
-      return;
-    }
-
-    isPlayingRef.current = true;
-    const blob = audioQueueRef.current.shift()!;
-    const blobUrl = URL.createObjectURL(blob);
-    const audio = new Audio(blobUrl);
-    currentAudioRef.current = audio;
-
-    audio.onended = () => {
-      URL.revokeObjectURL(blobUrl);
-      currentAudioRef.current = null;
-      processQueue();
-    };
-
-    audio.onerror = () => {
-      URL.revokeObjectURL(blobUrl);
-      currentAudioRef.current = null;
-      processQueue();
-    };
-
-    audio.play().catch((e) => {
-      console.debug("[Neural Link] Playback skipped:", e.message);
-      processQueue();
-    });
-  }, []);
-
-  const playAudioChunk = useCallback((blob: Blob) => {
-    audioQueueRef.current.push(blob);
-    if (!isPlayingRef.current) {
-      processQueue();
-    }
-  }, [processQueue]);
-
-  // --- 3. UI FEEDBACK ---
-  const updateLastMessage = useCallback((text: string) => {
-    setMessages(prev => {
-      const lastIdx = prev.length - 1;
-      const last = prev[lastIdx];
-      if (last && last.role === 'agent') {
-        const newMsgs = [...prev];
-        newMsgs[lastIdx] = { ...last, content: last.content + text };
-        return newMsgs;
-      }
-      return [...prev, { role: 'agent', content: text }];
-    });
-  }, []);
-
-  const sendTextMessage = useCallback((text: string, imageData?: string | null) => {
-    if (!text.trim()) return;
-    const command = text.replace(/jarvis|travis|garvis/gi, "JARVIS").trim();
-    if (socketRef.current?.readyState === WebSocket.OPEN) {
-        socketRef.current.send(JSON.stringify({ 
-          type: 'text_input',
-          text: command, 
-          image: imageData || null 
-        }));
-        setMessages(prev => [...prev.filter(m => m.content !== '[Audio Processing...]'), { role: 'user', content: command }]);
-        setIsThinking(true);
-    }
-  }, []);
-
-  // --- 4. CORE WEBSOCKET LOGIC ---
   const connect = useCallback(() => {
-    // If we're already connecting or open, don't start another one
-    if (socketRef.current && (socketRef.current.readyState === WebSocket.OPEN || socketRef.current.readyState === WebSocket.CONNECTING)) {
-        return;
-    }
-    
+    if (ws.current?.readyState === WebSocket.OPEN) return;
+
     const socket = new WebSocket(url);
-    socket.binaryType = 'arraybuffer';
-    socketRef.current = socket;
+    socket.binaryType = "arraybuffer";
+    ws.current = socket;
 
     socket.onopen = () => {
-        setIsConnected(true);
-        reconnectCountRef.current = 0;
-        console.log("[Jarvis Core] Neural Link Established.");
-        
-        const heartbeat = setInterval(() => {
-          if (socket.readyState === WebSocket.OPEN) {
-            socket.send(JSON.stringify({ type: 'PING' }));
-          }
-        }, 10000);
-        (socket as any)._heartbeat = heartbeat;
+      setIsConnected(true);
+      retryCount.current = 0;
+      console.log("[Jarvis] Neural link established.");
+
+      // Heartbeat — pong backend pings
+      pingTimer.current = window.setInterval(() => {
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: "PONG" }));
+        }
+      }, 25000);
+
+      // Warm up the AudioWorklet thread
+      initAudio();
+    };
+
+    socket.onmessage = (event) => {
+      if (event.data instanceof ArrayBuffer) {
+        // High-priority audio stream offloaded to Worklet thread
+        playRawChunk(event.data);
+        return;
+      }
+
+      const msg = JSON.parse(event.data as string);
+
+      switch (msg.type as MessageType) {
+        case "PING":
+          socket.send(JSON.stringify({ type: "PONG" }));
+          break;
+
+        case "TRANSCRIPTION":
+          setMessages(prev => [...prev, {
+            role: "user",
+            content: msg.text,
+            timestamp: Date.now()
+          }]);
+          break;
+
+        case "TURN_START":
+          setIsThinking(true);
+          if (msg.mood) setMood(msg.mood);
+          currentAssistantMsg.current = "";
+          break;
+
+        case "TEXT_CHUNK":
+          currentAssistantMsg.current += msg.text;
+          setMessages(prev => {
+            const last = prev[prev.length - 1];
+            if (last?.role === "assistant") {
+              return [...prev.slice(0, -1), {
+                ...last,
+                content: currentAssistantMsg.current
+              }];
+            }
+            return [...prev, {
+              role: "assistant",
+              content: currentAssistantMsg.current,
+              timestamp: Date.now()
+            }];
+          });
+          break;
+
+        case "TURN_COMPLETE":
+          setIsThinking(false);
+          currentAssistantMsg.current = "";
+          break;
+
+        case "ERROR":
+          console.error("[Jarvis] Agent error:", msg.message);
+          setIsThinking(false);
+          break;
+      }
     };
 
     socket.onclose = (e) => {
-        setIsConnected(false);
-        if ((socket as any)._heartbeat) clearInterval((socket as any)._heartbeat);
-        
-        // Only reconnect if the closure wasn't intentional (code 1000)
-        if (e.code !== 1000 && reconnectCountRef.current < MAX_RECONNECT_ATTEMPTS) {
-            console.log(`[Neural Link] Severed. Retrying (${reconnectCountRef.current + 1}/${MAX_RECONNECT_ATTEMPTS})...`);
-            setTimeout(() => {
-                reconnectCountRef.current++;
-                connect();
-            }, RECONNECT_INTERVAL);
-        }
-    };
+      setIsConnected(false);
+      clearInterval(pingTimer.current);
+      console.warn(`[Jarvis] Disconnected. Code: ${e.code}`);
 
-    socket.onmessage = async (event) => {
-      if (typeof event.data === 'string') {
-        const data = JSON.parse(event.data);
-        if (data.type === 'TRANSCRIPTION') {
-            setMessages(prev => {
-                const lastIdx = prev.length - 1;
-                if (lastIdx >= 0 && prev[lastIdx].content === '[Audio Processing...]') {
-                    const newMsgs = [...prev];
-                    newMsgs[lastIdx] = { ...newMsgs[lastIdx], content: data.text };
-                    return newMsgs;
-                }
-                return [...prev, { role: 'user', content: data.text }];
-            });
-        }
-        if (data.type === 'TURN_START') {
-            setMood(data.mood || 'normal');
-            setIsThinking(true);
-        }
-        if (data.type === 'TEXT_CHUNK') {
-            setIsThinking(false);
-            updateLastMessage(data.text);
-        }
-        if (data.type === 'TURN_COMPLETE') {
-            setIsThinking(false);
-            setMessages(prev => prev.filter(m => m.content !== '[Audio Processing...]'));
-        }
-      } else {
-        const blob = new Blob([event.data], { type: 'audio/wav' });
-        playAudioChunk(blob);
+      if (e.code !== 1000 && retryCount.current < MAX_RETRIES) {
+        const delay = Math.min(1000 * 2 ** retryCount.current, 30000);
+        retryCount.current++;
+        console.log(`[Jarvis] Reconnecting in ${delay}ms (attempt ${retryCount.current})`);
+        retryTimer.current = window.setTimeout(connect, delay);
       }
     };
-  }, [url, playAudioChunk, updateLastMessage]);
+
+    socket.onerror = () => socket.close();
+  }, [url, initAudio, playRawChunk]);
+
+  const startRecording = useCallback(async (imageFrame: string | null = null) => {
+    if (!ws.current || ws.current.readyState !== WebSocket.OPEN) return;
+
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+    mediaRecorder.current = recorder;
+
+    ws.current.send(JSON.stringify({ type: "AUDIO_START", image: imageFrame }));
+    setIsRecording(true);
+
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0 && ws.current?.readyState === WebSocket.OPEN) {
+        ws.current.send(e.data);
+      }
+    };
+
+    recorder.start(100); // 100ms chunks for low latency
+  }, []);
+
+  const stopRecording = useCallback(() => {
+    mediaRecorder.current?.stop();
+    mediaRecorder.current?.stream.getTracks().forEach(t => t.stop());
+    setIsRecording(false);
+
+    if (ws.current?.readyState === WebSocket.OPEN) {
+      ws.current.send(JSON.stringify({ type: "stop_recording" }));
+    }
+  }, []);
+
+  const sendTextMessage = useCallback((text: string, image: string | null = null) => {
+    if (!ws.current || ws.current.readyState !== WebSocket.OPEN) return;
+    ws.current.send(JSON.stringify({ type: "text_input", text, image }));
+  }, []);
+
+  const reconnect = useCallback(() => {
+    clearTimeout(retryTimer.current);
+    retryCount.current = 0;
+    ws.current?.close(1000);
+    connect();
+  }, [connect]);
+
+  const clearMessages = useCallback(() => setMessages([]), []);
 
   useEffect(() => {
     connect();
     return () => {
-        if (socketRef.current) {
-            const ws = socketRef.current;
-            // Detach listeners to prevent "onclose" firing the retry logic
-            ws.onopen = null; ws.onmessage = null; ws.onerror = null; ws.onclose = null;
-            
-            // If it's still handshaking, closing it triggers the "before established" warning.
-            // There is no clean way to "abort" a handshake in the standard WS API, 
-            // but checking state reduces the frequency of the error.
-            if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
-                ws.close(1000, "Unmount");
-            }
-            socketRef.current = null;
-        }
-        stopHardware();
+      clearTimeout(retryTimer.current);
+      clearInterval(pingTimer.current);
+      ws.current?.close(1000);
     };
-  }, [connect, stopHardware]);
-
-  const reconnect = useCallback(() => {
-    reconnectCountRef.current = 0;
-    if (socketRef.current) {
-        socketRef.current.onclose = null;
-        socketRef.current.close(1000);
-    }
-    connect();
   }, [connect]);
 
-  // --- 5. RECORDING LOGIC ---
-  const startRecording = useCallback(async (imageData?: string | null) => {
-    fetch('/api/core/spotify/pause').catch(() => {});
-    audioQueueRef.current = [];
-    isPlayingRef.current = false;
-    if (currentAudioRef.current) {
-        currentAudioRef.current.pause();
-        currentAudioRef.current = null;
-    }
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      activeStreamRef.current = stream;
-      
-      const recorder = new MediaRecorder(stream);
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0 && socketRef.current?.readyState === WebSocket.OPEN) {
-          e.data.arrayBuffer().then(buf => socketRef.current?.send(buf));
-        }
-      };
-
-      if (socketRef.current?.readyState === WebSocket.OPEN) {
-          socketRef.current.send(JSON.stringify({ type: 'AUDIO_START', image: imageData || null }));
-          setMessages(prev => [...prev, { role: 'user', content: '[Audio Processing...]' }]);
-          setIsRecording(true);
-          setIsThinking(true);
-          recorder.start(250);
-          mediaRecorderRef.current = recorder;
-      }
-    } catch (err) {
-      console.error("[Jarvis Core] Neural Link Interface Failure:", err);
-    }
-  }, []);
-
-  const stopRecording = useCallback(() => {
-    if (socketRef.current?.readyState === WebSocket.OPEN) {
-        socketRef.current.send(JSON.stringify({ type: 'stop_recording' }));
-    }
-    stopHardware();
-    setIsThinking(true);
-  }, [stopHardware]);
-
-  return { 
-    messages, isConnected, isRecording, 
-    isThinking, setIsThinking,
+  return {
+    messages,
+    isConnected,
+    isRecording,
+    isThinking,
+    isSpeaking,
     mood,
-    startRecording, stopRecording,
-    sendTextMessage, reconnect
+    setIsThinking,
+    startRecording,
+    stopRecording,
+    sendTextMessage,
+    reconnect,
+    clearMessages
   };
 }

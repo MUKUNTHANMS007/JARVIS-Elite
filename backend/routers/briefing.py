@@ -6,7 +6,7 @@ from services.groq_service import summarize_inbox
 from tools.gmail_tool import get_unread_count_raw as get_real_gmail_count
 from tools.leetcode_tool import get_leetcode_stats, get_leetcode_streak
 
-router = APIRouter(prefix="/api")
+router = APIRouter()
 
 # ── LEFT CARD ──────────────────────────────────────────
 

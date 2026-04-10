@@ -9,6 +9,8 @@ class Telemetry(BaseModel):
     cpu_percent: float
     ram_percent: float
     mood_score: float = 0.0  # 0.0 to 1.0
+    battery_percent: float = 0.0
+    power_plugged: bool = True
     is_online: bool = True
 
 class DashboardMetrics(BaseModel):
@@ -17,6 +19,9 @@ class DashboardMetrics(BaseModel):
     reminder_count: int = 0
     leetcode_status: Optional[Any] = None
     github_pulse: Optional[Any] = None
+    academic_radar: Optional[List[Any]] = None
+    intelligence_briefing: Optional[str] = None
+    is_batman_mode: bool = False
 
 class ProactiveAlert(BaseModel):
     id: str
@@ -32,5 +37,6 @@ class NeuralPacket(BaseModel):
     state: Literal["IDLE", "THINKING", "SPEAKING", "LISTENING", "TOOL_EXECUTING"] = "IDLE"
     telemetry: Telemetry
     dashboard: Optional[DashboardMetrics] = None
+    focus: Optional[Any] = None
     active_tool: Optional[str] = None
     alert: Optional[ProactiveAlert] = None

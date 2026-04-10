@@ -2,7 +2,6 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import { useAudioSocket } from "../hooks/useAudioSocket";
 import { useVision } from "../hooks/useVision"; // Now using your updated version
 import { useWakeWord } from "../hooks/useWakeWord";
-import { useWakeWord } from "../hooks/useWakeWord";
 // Removed useSystemSocket import, now passed as prop
 
 // Page Components
@@ -34,15 +33,19 @@ interface TimerEvent {
 
 import { NEURAL_WS, HUB_WS, API_ENDPOINTS } from "../utils/apiConfig";
 
+interface JarvisInterfaceProps {
+  activePage: string;
+  setActivePage: (p: string) => void;
+  systemData: any;
+  isPulseConnected: boolean;
+}
+
 export function JarvisInterface({ 
   activePage, 
   setActivePage,
-  systemData: data // Renamed to 'data' to maintain compatibility with existing logic
-}: { 
-  activePage: string; 
-  setActivePage: (p: string) => void;
-  systemData: any;
-}) {
+  systemData: data,
+  isPulseConnected
+}: JarvisInterfaceProps) {
   // --- 1. Core Audio & Communication ---
   const { 
     messages, 
@@ -50,12 +53,13 @@ export function JarvisInterface({
     isRecording, 
     isThinking, 
     setIsThinking,
+    isSpeaking,
     startRecording, 
     stopRecording,
     sendTextMessage,
     mood,
     reconnect: reconnectAudio
-  } = useAudioSocket(`${NEURAL_WS}/ws/voice`);
+  } = useAudioSocket(API_ENDPOINTS.VOICE_WS);
 
   // useSystemSocket moved to App.tsx for shared 3D background sync
 
@@ -106,9 +110,17 @@ export function JarvisInterface({
   // --- 6. NEURAL PULSE SYNC (Unified Dashboard + Status + Focus) ---
   const fetchSync = useCallback(async () => {
     try {
-      const resp = await fetch(`${API_ENDPOINTS.SYNC}`);
+      const resp = await fetch(API_ENDPOINTS.SYNC);
       const syncData = await resp.json();
-      if (syncData.intelligence) setStats(syncData.intelligence);
+      if (syncData.intelligence) {
+        const intel = syncData.intelligence;
+        // Normalize backend key names to the UI schema.
+        const normalized = {
+          ...intel,
+          intelligence_briefing: intel.intelligence_briefing ?? intel.gmail_briefing
+        };
+        setStats(normalized);
+      }
       if (syncData.system) setSystemStatus(syncData.system);
     } catch (e) {
       console.warn("[Neural Hub] Initial sync pulse failed. Falling back to WebSocket stream.");
@@ -121,24 +133,48 @@ export function JarvisInterface({
 
   useEffect(() => {
     if (data) {
-      if (data.dashboard) setStats(data.dashboard);
-      if (data.status) {
-        setSystemStatus(data.status);
-        const energy = data.status.energy;
-        if (typeof energy === 'number' && !isNaN(energy)) {
-           setEnergyLevel(Math.round(energy));
+      // Production Grade Packet Mapping
+      if (data.dashboard) {
+        setStats((prev: any) => {
+          const next = { ...(prev || {}) };
+          const d = data.dashboard;
+
+          if (typeof d.unread_mail === 'number') next.unread_mail = d.unread_mail;
+          if (typeof d.spotify_track === 'string') next.spotify_track = d.spotify_track;
+          
+          // Map to keys expected by DashboardPage
+          if (d.leetcode != null) next.leetcode = d.leetcode;
+          if (d.github != null) next.github = d.github;
+          if (d.briefing != null) next.intelligence_briefing = d.briefing;
+          
+          return next;
+        });
+
+        // --- PROACTIVE SENTINEL HANDSHAKE ---
+        if (data.dashboard.proactive_trigger) {
+          const trigger = data.dashboard.proactive_trigger;
+          if (trigger.timestamp > lastProactiveTimestamp.current) {
+            lastProactiveTimestamp.current = trigger.timestamp;
+            // Automate a "Morning Protocol" or "System Alert" handshake
+            console.log("[Sentinel] Proactive Briefing Triggered:", trigger.title);
+            sendTextMessage(`Summarize the alert: ${trigger.title} starting in ${trigger.diff} minutes.`);
+          }
         }
       }
-      if (data.focus) setFocusData(data.focus);
-      
-      // --- PROACTIVE SENTINEL HANDSHAKE ---
-      if (data.dashboard?.proactive_trigger) {
-        const trigger = data.dashboard.proactive_trigger;
-        if (trigger.timestamp > lastProactiveTimestamp.current) {
-          lastProactiveTimestamp.current = trigger.timestamp;
-          // Automate a "Morning Protocol" or "System Alert" handshake
-          console.log("[Sentinel] Proactive Briefing Triggered:", trigger.title);
-          sendTextMessage(`Summarize the alert: ${trigger.title} starting in ${trigger.diff} minutes.`);
+
+      if (data.status) {
+        const s = data.status;
+        setSystemStatus((prev: any) => ({
+          ...prev,
+          cpu: s.cpu,
+          ram: s.ram,
+          disk: s.disk,
+          uptime: s.uptime,
+          energy: s.energy
+        }));
+        
+        if (typeof s.energy === 'number') {
+          setEnergyLevel(Math.round(s.energy));
         }
       }
     }
@@ -158,11 +194,21 @@ export function JarvisInterface({
   return (
     <div className="min-h-screen bg-surface text-on-surface font-sans selection:bg-primary/10">
       
+      {/* Shadow Protocol Assets */}
+      {data?.dashboard?.is_batman_mode && <div className="scanner-line h-screen fixed top-0 left-0" />}
+
+      {/* Batman Mode Banner */}
+      <div className="batman-mode-banner">
+        🦇 &nbsp; SHADOW PROTOCOL: ACTIVE — ACCESS LEVEL SIGMA-9 &nbsp; 🦇
+      </div>
+
       {/* Top Navigation Shell */}
-      <nav className="fixed top-0 w-full z-50 bg-white/70 backdrop-blur-xl flex items-center justify-between px-6 py-4 border-b border-black/5">
+      <nav className="fixed top-0 w-full z-50 glass-nav flex items-center justify-between px-6 py-4">
         <div className="flex items-center gap-4">
           <div className={`w-2 h-2 rounded-full ${isConnected && isPulseConnected ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`} />
-          <span className="text-xs font-bold tracking-[0.2em] text-zinc-900 uppercase">JARVIS NEURAL CORE</span>
+          <span className="brand-title text-xs font-bold tracking-[0.2em] uppercase">
+            {data?.dashboard?.is_batman_mode ? "ALFRED MODE: SHADOW PROTOCOL" : "JARVIS NEURAL CORE"}
+          </span>
           <div className="h-4 w-px bg-black/5 mx-2" />
           <div className="flex items-center gap-2">
              <span className={`text-[8px] font-black uppercase tracking-[0.3em] px-2 py-0.5 rounded ${mood === 'stressed' ? 'bg-amber-100 text-amber-700 font-bold' : 'bg-emerald-50/50 text-emerald-600'}`}>
@@ -196,7 +242,9 @@ export function JarvisInterface({
         </div>
 
         <div className="w-8 h-8 rounded-full bg-zinc-900 flex items-center justify-center cursor-pointer overflow-hidden border border-white/10" onClick={() => setActivePage('settings')}>
-          <span className="text-white text-[10px] font-bold tracking-tighter">JARVIS</span>
+          <span className="text-white text-[10px] font-bold tracking-tighter">
+            {data?.dashboard?.is_batman_mode ? "ALFRED" : "JARVIS"}
+          </span>
         </div>
       </nav>
 
@@ -241,6 +289,7 @@ export function JarvisInterface({
             isConnected={isConnected}
             isRecording={isRecording}
             isThinking={isThinking}
+            isSpeaking={isSpeaking}
             messages={messages}
             stats={stats}
             focusData={focusData}
@@ -322,6 +371,18 @@ export function JarvisInterface({
           </div>
         ))}
       </nav>
+      
+      {/* --- NEURAL OPTICS PERSISTENCE LAYER --- */}
+      {/* Globally persistent, hidden video element ensures vision works across all pages. */}
+      <div className="fixed -bottom-[1000px] -left-[1000px] w-1 h-1 overflow-hidden pointer-events-none opacity-0">
+        <video 
+          ref={videoRef} 
+          autoPlay 
+          playsInline 
+          muted 
+          className="w-full h-full"
+        />
+      </div>
     </div>
   );
 }

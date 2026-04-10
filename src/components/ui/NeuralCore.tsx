@@ -12,6 +12,11 @@ interface NeuralCoreProps {
 
 export function NeuralCore({ className, nodeCount = 200, packet }: NeuralCoreProps) {
   const containerRef = useRef<HTMLDivElement>(null)
+  const packetRef = useRef<NeuralPacket | null>(null)
+
+  useEffect(() => {
+    packetRef.current = packet ?? null
+  }, [packet])
   
   useEffect(() => {
     if (!containerRef.current) return
@@ -103,22 +108,24 @@ export function NeuralCore({ className, nodeCount = 200, packet }: NeuralCorePro
     }
     window.addEventListener('resize', handleResize)
 
+    const startTime = performance.now()
+
     // Animation Loop
     const animate = () => {
         requestAnimationFrame(animate)
         
         // --- NEURAL MODULATION ---
-        const state = packet?.state || "IDLE"
-        const mood = packet?.telemetry?.mood_score || 0
+        const p = packetRef.current
+        const state = p?.state || "IDLE"
         
         
         // Dynamic Base Color based on System State
-        const isAlertActive = !!packet?.alert
+        const isAlertActive = !!p?.alert
         const targetColor = isAlertActive ? stressedColor : baseColor
         nodeMaterial.color.lerp(targetColor, 0.05)
         
         // 1. Particle Physics & Scaling Pulse
-        const time = clock.getElapsedTime()
+        const time = (performance.now() - startTime) / 1000
         const pulseScale = isAlertActive ? 1.0 + Math.sin(time * 5) * 0.2 : 1.0
         
         for (let i = 0; i < nodeCount; i++) {
@@ -220,10 +227,7 @@ export function NeuralCore({ className, nodeCount = 200, packet }: NeuralCorePro
         lineMaterial.dispose()
         renderer.dispose()
     }
-  }, [nodeCount, packet]) // Trigger re-effect if packet updates (though lerp inside loop handles mood)
-
-  return <div ref={containerRef} className={`${className} fixed inset-0 z-0 pointer-events-none`} />
-}
+  }, [nodeCount]) // Do not recreate Three.js scene on every packet update
 
   return <div ref={containerRef} className={`${className} fixed inset-0 z-0 pointer-events-none`} />
 }

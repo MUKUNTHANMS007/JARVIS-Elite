@@ -45,18 +45,24 @@ def get_jarvis_email_briefing() -> str:
         if not messages:
             return "Your primary inbox is pristine, Sir. No action required."
 
-        raw_data = []
-        for msg in messages:
+        from concurrent.futures import ThreadPoolExecutor
+
+        def fetch_msg_metadata(msg_id):
             try:
                 m = service.users().messages().get(
-                    userId='me', id=msg['id'], format='metadata', 
+                    userId='me', id=msg_id, format='metadata', 
                     metadataHeaders=['Subject', 'From']
                 ).execute()
                 headers = m['payload']['headers']
                 subj = next((h['value'] for h in headers if h['name'] == 'Subject'), 'N/A')
                 sender = next((h['value'] for h in headers if h['name'] == 'From'), 'N/A')
-                raw_data.append(f"From: {sender} | Subj: {subj} | Snippet: {m.get('snippet', '')}")
-            except: continue
+                return f"From: {sender} | Subj: {subj} | Snippet: {m.get('snippet', '')}"
+            except:
+                return None
+
+        # Execute Parallel Fetching (Sub-1s sync vs 5s+ serial)
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            raw_data = list(filter(None, executor.map(fetch_msg_metadata, [m['id'] for m in messages])))
 
         if not raw_data: return "Inbox scanned. No primary updates found."
 
@@ -67,15 +73,20 @@ def get_jarvis_email_briefing() -> str:
 
         prompt = f"""
         Analyze these emails for Mukunthan (PSG iTech Student).
-        Your task is to identify and prioritize: 
-        1. Security/Auth (Password resets, login alerts, e.g. Mathpix).
-        2. Finance/Subcriptions (Payment failures, receipts, e.g. Spotify, Google Play).
-        3. Academic/Career (Placements, Internships, Exams, Lab Records, e.g. Indeed).
-        4. Competitive Events (Hackathons, Coding contests, e.g. Codeforces).
-
-        Provide a concise, high-intelligence executive briefing in 4 sentences max.
+        Act as JARVIS, an elite and highly professional personal assistant.
         
-        CRITICAL: Identify the specific entity (e.g. Spotify, Mathpix) and the required action.
+        OUTPUT FORMAT (STRICT):
+        GREETING| [Sir, a professional opening sentence about the inbox state.]
+        ITEM| [Category] | [Priority Action Item]
+        ITEM| [Category] | [Priority Action Item]
+        ITEM| [Category] | [Priority Action Item]
+        ITEM| [Category] | [Priority Action Item]
+        
+        CONSTRAINTS:
+        - TOTAL 5 LINES ONLY.
+        - NO Markdown headers (###), NO bullets (• or *), NO bolding (**).
+        - Categories should be one word (e.g. SECURITY, CAREER, ACADEMIC, FINANCE).
+        - Keep content concise but elegant.
         
         Emails:
         {chr(10).join(raw_data)}

@@ -1,5 +1,5 @@
 import os
-from github import Github
+from github import Github, GithubException
 from dotenv import load_dotenv
 import time
 
@@ -95,6 +95,12 @@ def get_github_pulse(repo_names=None):
                     "sha": commits[0].sha[:7] if commits.totalCount > 0 else None
                 })
                 print(f"[GitHub Pulse] Successfully synchronized: {name}")
+            except GithubException as ge:
+                if ge.status == 409:
+                    print(f"[GitHub Pulse] Skipping empty repository: {name}")
+                else:
+                    print(f"[GitHub Pulse] Failed to sync '{name}': {ge}")
+                continue
             except Exception as re: 
                 print(f"[GitHub Pulse] Failed to sync '{name}': {re}")
                 continue

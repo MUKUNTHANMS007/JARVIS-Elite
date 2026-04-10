@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { JarvisInterface } from "./components/JarvisInterface";
 import { NeuralCore } from "./components/ui/NeuralCore";
@@ -7,13 +7,55 @@ import { HUB_WS } from "./utils/apiConfig";
 
 export default function App() {
   const [view, setView] = useState<'landing' | 'interface'>('landing');
-  const [activePage, setActivePage] = useState<'dashboard' | 'work' | 'core' | 'history' | 'settings'>('dashboard');
+  const [activePage, setActivePage] = useState<string>('dashboard');
 
-  const { data: packet } = useSystemSocket(`${HUB_WS}/ws/system`);
+  const { data: packet, isConnected: isPulseConnected } = useSystemSocket(`${HUB_WS}/ws/system`);
+  const [isTransitioning, setIsTransitioning] = useState(false);
+  const [interfaceKey, setInterfaceKey] = useState(0);
+  const lastMode = useRef<boolean | null>(null);
+
+  useEffect(() => {
+    const isBatman = packet?.dashboard?.is_batman_mode ?? false;
+    
+    // Trigger "Neural Reset" (Soft Refresh) if mode changes
+    if (lastMode.current !== null && lastMode.current !== isBatman) {
+        setIsTransitioning(true);
+        setInterfaceKey(prev => prev + 1);
+        
+        // Reset overlay fades after 1sec
+        setTimeout(() => {
+            setIsTransitioning(false);
+        }, 1000);
+    }
+    lastMode.current = isBatman;
+
+    if (isBatman) {
+        document.documentElement.classList.add("batman-theme");
+        document.title = "BATCOMPUTER — NEURAL CORE";
+        new Audio("/sounds/batman-activate.mp3").play().catch(() => {});
+    } else {
+        document.documentElement.classList.remove("batman-theme");
+        document.title = "JARVIS — NEURAL CORE";
+    }
+  }, [packet?.dashboard?.is_batman_mode]);
 
   return (
     <div className="min-h-screen bg-black text-white font-sans selection:bg-primary/20 flex flex-col overflow-x-hidden relative">
       
+      {/* Neural Reset Overlay (Soft Refresh) */}
+      <AnimatePresence>
+        {isTransitioning && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="reboot-overlay"
+          >
+            <div className="reboot-text">Neural Pulse Resynchronizing...</div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Dynamic Background Architecture (Local Three.js System) */}
       <NeuralCore nodeCount={250} className="opacity-60" packet={packet} />
 
@@ -76,7 +118,13 @@ export default function App() {
             </div>
           </motion.main>
         ) : (
-          <JarvisInterface key="interface" activePage={activePage} setActivePage={setActivePage} systemData={packet} />
+          <JarvisInterface 
+            key={`interface-${interfaceKey}`} 
+            activePage={activePage} 
+            setActivePage={setActivePage} 
+            systemData={packet} 
+            isPulseConnected={isPulseConnected}
+          />
         )}
       </AnimatePresence>
     </div>

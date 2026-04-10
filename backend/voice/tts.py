@@ -4,82 +4,115 @@ import io
 import torch
 import soundfile as sf
 import asyncio
-from kokoro import KPipeline
+import numpy as np
 from typing import AsyncGenerator
 from datetime import datetime
 
 # ==========================================
-# JARVIS Local Neural TTS (Kokoro-82M)
+# JARVIS Production Neural TTS (Kokoro-82M)
 # ==========================================
-# This implementation replaces ElevenLabs with a zero-cost, 
-# local inference engine (Kokoro) for sub-50ms voice latency.
+# Optimized for zero-lag WebSocket performance and Docker portability.
 
-# Initialize the pipeline globally on GPU for maximum neural speed.
-# Benchmarked: GPU warm inference = 0.160s vs CPU = 1.706s (10.7x faster)
-# Kokoro-82M uses ~400MB VRAM — well within your RTX 3050 Ti 4.3GB budget.
-print("[Neural Link] Initializing Kokoro Neural Core (RTX 3050 Ti / CUDA)...")
-pipeline = KPipeline(lang_code='b', device='cuda')
+# Audio Calibration
+VOLUME_GAIN = 1.5
+SAMPLE_RATE = 24000
+
+_pipeline = None
+
+def _get_pipeline():
+    global _pipeline
+    if _pipeline is None:
+        # RTX 3050 Ti Detection / CUDA Support
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        print(f"[Neural Link] Initializing Kokoro Core on {device}...")
+        from kokoro import KPipeline
+        _pipeline = KPipeline(lang_code='b', device=device)
+    return _pipeline
 
 def clean_text(text: str) -> str:
-    """Standard Neural Clean: strip out markdown artifacts and extra space."""
+    """Strip markdown and normalize whitespace."""
     text = re.sub(r'(\*\*|\*|#|`|\[|\]|<[^>]+>)', '', text)
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
-
-import numpy as np
-
-# Audio Gain Calibration: Increase to 1.5 for professional authority
-VOLUME_GAIN = 1.5
+    return re.sub(r'\s+', ' ', text).strip()
 
 async def synthesize_speech_stream(text: str) -> AsyncGenerator[bytes, None]:
     """
-    Kokoro Local Streaming: Generates audio in milliseconds without network hops.
-    Yields WAV binary chunks to the WebSocket worker.
+    Asynchronous Neural Streaming:
+    - Offloads inference to worker threads to prevent WebSocket heartbeat drift.
+    - Yields RAW PCM_16 bytes for gapless browser playback.
     """
     cleaned = clean_text(text)
     if not cleaned:
         yield b""
         return
 
-    # Benchmark: Start timer for first-byte latency proof
     start_time = datetime.now()
+    pipeline = _get_pipeline()
     
+    def _generate():
+        # The Kokoro pipeline call itself is synchronous
+        return pipeline(cleaned, voice='bm_lewis', speed=1.1, split_pattern=r'[,;.:!?]|\s+')
+
     try:
-        # --- AGGRESSIVE NEURAL CHUNKING (CPU-Only Optimization) ---
-        # We now split on commas and semicolons to ensure the first word is yielded 
-        # instantly, compensating for the slightly lower throughput of CPU-only inference.
-        generator = pipeline(cleaned, voice='bm_lewis', speed=1.1, split_pattern=r'[,;.:!?]+\s+')
+        # 1. Offload generator creation
+        generator = await asyncio.to_thread(_generate)
         
+        # 2. Truly Non-Blocking Iteration:
+        # We must wrap 'next(generator)' in a thread to keep the event loop alive.
+        iterator = iter(generator)
         first_byte = True
-        for gs, ps, audio in generator:
+
+        while True:
+            def _get_next():
+                try:
+                    return next(iterator)
+                except StopIteration:
+                    return None
+            
+            result = await asyncio.to_thread(_get_next)
+            if result is None:
+                break
+            
+            _, _, audio = result
             if audio is None: continue
             
-            # Apply Neural Gain (Volume Boost) with Hard Clipping Protection
+            # --- Gain & Clipping Protection ---
             audio = np.clip(audio * VOLUME_GAIN, -1.0, 1.0)
             
-            # Convert audio tensor to WAV for web delivery
+            # --- Convert to RAW PCM 16-bit ---
+            # Standardizing on RAW PCM prevents WAV-header 'clicks' in the browser.
             byte_io = io.BytesIO()
-            sf.write(byte_io, audio, 24000, format='WAV')
-            wav_bytes = byte_io.getvalue()
+            sf.write(byte_io, audio, SAMPLE_RATE, format='RAW', subtype='PCM_16')
+            audio_bytes = byte_io.getvalue()
             
             if first_byte:
-                duration = (datetime.now() - start_time).total_seconds()
-                print(f"[Neural Link] First Byte Produced Locally in {duration:.4f}s")
+                delta = (datetime.now() - start_time).total_seconds()
+                print(f"[Neural Link] First Byte (RAW PCM) Produced in {delta:.4f}s")
                 first_byte = False
                 
-            yield wav_bytes
+            yield audio_bytes
+            # Yield control back to the event loop between tokens
+            await asyncio.sleep(0) 
             
     except Exception as e:
-        print(f"[Neural Link] Local TTS Inference Error: {e}")
+        print(f"[Neural Link] TTS Processing Error: {e}")
         yield b""
 
-async def close_tts_client():
-    """Cleanup (Local models stay resident until process ends)."""
-    pass
-
-# Support for legacy full-blob synthesis
 async def synthesize_speech(text: str) -> bytes:
-    full = bytearray()
+    """Legacy support for full blobs (Adds a single WAV Header)."""
+    chunks = []
     async for chunk in synthesize_speech_stream(text):
-        full.extend(chunk)
-    return bytes(full)
+        if chunk:
+            chunks.append(chunk)
+    
+    if not chunks:
+        return b""
+        
+    # Reconstruct from RAW 16-bit PCM buffer
+    combined = np.frombuffer(b"".join(chunks), dtype=np.int16)
+    byte_io = io.BytesIO()
+    sf.write(byte_io, combined, SAMPLE_RATE, format='WAV')
+    return byte_io.getvalue()
+
+async def close_tts_client():
+    """Cleanup logic if models need explicit release."""
+    pass

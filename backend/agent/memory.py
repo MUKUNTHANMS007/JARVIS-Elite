@@ -44,14 +44,27 @@ async def init_db():
         return False
     try:
         # Note: In Supabase v2.28+, we use create_async_client for non-blocking I/O
-        from supabase import create_async_client
-        supabase = await create_async_client(url, key)
+        # Added a 10s timeout to prevent total startup hang in case of cloud drift
+        from supabase import create_async_client, ClientOptions
+        supabase = await asyncio.wait_for(
+            create_async_client(url, key, options=ClientOptions(postgrest_client_timeout=10)),
+            timeout=12.0
+        )
         db_url = os.environ.get("SUPABASE_URL")
         print(f"[Memory] Neural Memory Active (Async) for {db_url}")
         return True
     except Exception as e:
         print(f"[Memory] Failed to initialize Async Supabase client: {e}")
         return False
+
+async def get_db_status() -> dict:
+    """Diagnostic helper for architectural auditing."""
+    return {
+        "supabase_initialized": supabase is not None,
+        "supabase_url": url if url else "MISSING",
+        "has_keys": bool(url and key),
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
 
 async def get_history(user_id: str, limit: int = 10) -> list:
     """Retrieve the last `limit` messages asynchronously, with Redis semantic mirroring."""

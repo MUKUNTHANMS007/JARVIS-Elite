@@ -1,6 +1,6 @@
 import { motion, AnimatePresence } from "motion/react";
 import React from "react";
-import { controlSpotify } from "../../hooks/useBriefing";
+import { controlSpotify } from "../../utils/spotify";
 import { HUB_URL } from "../../utils/apiConfig";
 
 interface DashboardPageProps {
@@ -153,10 +153,10 @@ export function DashboardPage(props: DashboardPageProps) {
       </header>
 
       {/* Main Bento Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-6 items-start">
         
         {/* GitHub Pulse - Real-time Repository Tracking */}
-        <div className="md:col-span-2 bg-surface-container-lowest p-8 rounded-2xl flex flex-col justify-between group cursor-pointer shadow-sm border border-black/5 relative overflow-hidden transition-all hover:shadow-md">
+        <div className="md:col-span-2 glass-neural p-8 rounded-[32px] flex flex-col justify-between group cursor-pointer shadow-sm relative overflow-hidden transition-all hover:shadow-xl hover:-translate-y-1 duration-500">
           {/* Animated Gradient Background for Synced Status */}
           <div className="absolute inset-0 bg-linear-to-br from-emerald-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
           
@@ -213,7 +213,7 @@ export function DashboardPage(props: DashboardPageProps) {
         </div>
 
         {/* LeetCode Mastery - Neural Sync Enabled */}
-        <div className="md:col-span-2 bg-surface-container-lowest p-8 rounded-2xl shadow-sm border border-black/5 group relative overflow-hidden transition-all hover:shadow-md cursor-pointer">
+        <div className="md:col-span-2 glass-neural p-8 rounded-[32px] shadow-sm group relative overflow-hidden transition-all hover:shadow-xl hover:-translate-y-1 duration-500 cursor-pointer">
           {/* Animated Gradient Background */}
           <div className="absolute inset-0 bg-linear-to-br from-amber-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
           
@@ -264,7 +264,7 @@ export function DashboardPage(props: DashboardPageProps) {
         {/* Gemini Intelligence Hub */}
         <div 
           onClick={() => setActivePage?.('history')}
-          className="md:col-span-2 bg-surface-container-lowest p-8 rounded-2xl flex flex-col justify-between shadow-sm cursor-pointer group relative overflow-hidden border border-black/5 transition-all hover:shadow-md"
+          className="md:col-span-2 glass-neural p-8 rounded-[32px] flex flex-col justify-between shadow-sm cursor-pointer group relative overflow-hidden transition-all hover:shadow-xl hover:-translate-y-1 duration-500"
         >
           {/* Animated Gradient Background */}
           <div className="absolute inset-0 bg-linear-to-br from-indigo-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
@@ -278,18 +278,80 @@ export function DashboardPage(props: DashboardPageProps) {
                <span className="text-[10px] font-bold uppercase tracking-widest opacity-60">Neural Sync</span>
             </div>
           </div>
-          <div className="mt-8">
-            <h3 className="text-xs font-bold uppercase tracking-[0.2em] text-secondary mb-4">GMAIL EXECUTIVE BRIEFING</h3>
-            <AnimatePresence mode="wait">
-              <motion.p 
-                key={stats?.intelligence_briefing}
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="text-lg font-medium tracking-tight leading-relaxed text-balance"
-              >
-                {stats?.intelligence_briefing || "Scanning your PSG iTech intelligence layer..."}
-              </motion.p>
-            </AnimatePresence>
+          <div className="mt-8 space-y-4">
+            <h3 className="text-xs font-bold uppercase tracking-[0.2em] text-secondary mb-4 flex items-center gap-2">
+              <span className="material-symbols-outlined text-[10px]">verified_user</span>
+              Intelligence Protocol
+            </h3>
+            
+            {(() => {
+              const text = stats?.intelligence_briefing || "";
+              const lines = text.split('\n');
+              const greeting = lines.find(l => l.startsWith('GREETING|'))?.split('|')[1]?.trim();
+              const items = lines.filter(l => l.startsWith('ITEM|')).map(l => {
+                const parts = l.split('|');
+                return { category: parts[1]?.trim(), content: parts[2]?.trim() };
+              });
+
+              if (!text || (!greeting && items.length === 0)) {
+                return (
+                  <p className="text-[13px] font-medium text-zinc-400 italic">
+                    Scanning your PSG iTech intelligence layer...
+                  </p>
+                );
+              }
+
+              return (
+                <div className="space-y-4 animate-in fade-in slide-in-from-top-2 duration-700">
+                  {greeting && (
+                    <p className="text-[13px] font-semibold text-zinc-900 leading-relaxed border-l-2 border-primary pl-3 py-1">
+                      {greeting}
+                    </p>
+                  )}
+                  <div className="space-y-2">
+                    {items.map((item, idx) => {
+                      const icons: Record<string, string> = {
+                        'SECURITY': 'shield',
+                        'CAREER': 'work',
+                        'ACADEMIC': 'school',
+                        'FINANCE': 'account_balance_wallet'
+                      };
+                      const colors: Record<string, string> = {
+                        'SECURITY': 'text-rose-600 bg-rose-50',
+                        'CAREER': 'text-emerald-600 bg-emerald-50',
+                        'ACADEMIC': 'text-indigo-600 bg-indigo-50',
+                        'FINANCE': 'text-amber-600 bg-amber-50'
+                      };
+                      const cat = item.category?.toUpperCase() || 'DEFAULT';
+                      
+                      return (
+                        <motion.div 
+                          key={idx}
+                          initial={{ opacity: 0, x: -10 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          transition={{ delay: 0.1 * idx }}
+                          className="flex items-center gap-3 p-2 rounded-xl bg-surface-container-low/30 border border-black/[0.02]"
+                        >
+                          <div className={`p-1.5 rounded-lg flex items-center justify-center ${colors[cat] || 'text-zinc-500 bg-zinc-50'}`}>
+                            <span className="material-symbols-outlined text-[14px]">
+                              {icons[cat] || 'info'}
+                            </span>
+                          </div>
+                          <div className="flex flex-col">
+                            <span className="text-[10px] font-black uppercase tracking-widest opacity-40 leading-none mb-1">
+                              {item.category}
+                            </span>
+                            <span className="text-[12px] font-medium text-zinc-700 line-clamp-1">
+                              {item.content}
+                            </span>
+                          </div>
+                        </motion.div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
           <div className="mt-6 pt-6 border-t border-black/5 flex justify-between items-center opacity-60 group-hover:opacity-100 transition-opacity">
             <span className="text-[10px] font-bold uppercase tracking-widest">Confidence: 98%</span>
@@ -300,34 +362,52 @@ export function DashboardPage(props: DashboardPageProps) {
         {/* Neural Reminder Pulse */}
         <div 
           onClick={() => setActivePage?.('calendar')}
-          className="bg-surface-container-lowest p-8 rounded-2xl flex flex-col justify-between shadow-sm cursor-pointer group relative overflow-hidden border border-black/5 transition-all hover:shadow-md"
+          className="bg-surface-container-lowest p-8 rounded-2xl flex flex-col shadow-sm cursor-pointer group relative overflow-hidden border border-black/5 transition-all hover:shadow-md min-h-[220px]"
         >
           {/* Animated Gradient Background */}
           <div className="absolute inset-0 bg-linear-to-br from-rose-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
           
-          <div className="p-3 bg-rose-50 rounded-xl w-fit relative z-10">
+          <div className="p-3 bg-rose-50 rounded-xl w-fit relative z-10 transition-transform group-hover:scale-110">
             <span className="material-symbols-outlined text-rose-600">event_note</span>
           </div>
           <div className="mt-8 relative z-10">
-            <p className="text-5xl font-light tracking-tighter">{reminderCount}</p>
-            <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-400 mt-2">Active Reminders</p>
+            <p className="text-6xl font-light tracking-tighter leading-none">{reminderCount}</p>
+            <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-400 mt-3">Active Reminders</p>
+          </div>
+          <div className="mt-auto pt-4 relative z-10 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-2">
+             <span className="text-[9px] font-bold uppercase tracking-widest text-rose-600">View Protocol</span>
+             <span className="material-symbols-outlined text-[10px] text-rose-600">north_east</span>
           </div>
         </div>
 
         {/* Network Card */}
-        <div className="bg-surface-container-lowest p-8 rounded-2xl flex flex-col justify-between shadow-sm group relative overflow-hidden border border-black/5 transition-all hover:shadow-md">
+        <div className="bg-surface-container-lowest p-8 rounded-2xl flex flex-col shadow-sm group relative overflow-hidden border border-black/5 transition-all hover:shadow-md min-h-[220px]">
           {/* Animated Gradient Background */}
           <div className="absolute inset-0 bg-linear-to-br from-sky-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
           
-          <div className="flex justify-between items-center mb-8 relative z-10">
-            <div className="p-3 bg-sky-50 rounded-xl">
+          <div className="flex justify-between items-center mb-6 relative z-10">
+            <div className="p-3 bg-sky-50 rounded-xl transition-transform group-hover:rotate-12">
               <span className="material-symbols-outlined text-sky-600">router</span>
             </div>
-            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
+            <div className="px-2 py-0.5 bg-emerald-50 rounded-full flex items-center gap-1">
+              <div className="w-1 h-1 rounded-full bg-emerald-500 animate-pulse"></div>
+              <span className="text-[8px] font-bold text-emerald-600 uppercase">Static Link</span>
+            </div>
           </div>
           <div className="relative z-10">
-            <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-400">System Link</p>
-            <h4 className="text-xl font-bold mt-1 tracking-tight">Uptime: {systemStatus?.uptime || "14d"}</h4>
+            <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-400 mb-2">System Core Link</p>
+            <h4 className="text-2xl font-bold tracking-tight">Up: {systemStatus?.uptime || "14d"}</h4>
+            <div className="mt-4 flex items-center gap-4">
+               <div>
+                  <p className="text-[8px] font-bold text-zinc-400 uppercase tracking-widest">Ping</p>
+                  <p className="text-xs font-bold text-zinc-700">12ms</p>
+               </div>
+               <div className="w-px h-6 bg-black/5" />
+               <div>
+                  <p className="text-[8px] font-bold text-zinc-400 uppercase tracking-widest">Load</p>
+                  <p className="text-xs font-bold text-zinc-700">0.82</p>
+               </div>
+            </div>
           </div>
         </div>
 

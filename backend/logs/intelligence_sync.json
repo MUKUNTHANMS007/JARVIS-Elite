@@ -1,6 +1,6 @@
 {
-  "gmail_unread": 29,
-  "gmail_briefing": "Sir, I've scanned the mail but the intelligence hub encountered a drift: 503 UNAVAILABLE. {'error': {'code': 503, 'message': 'This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.', 'status': 'UNAVAILABLE'}}",
+  "gmail_unread": 0,
+  "gmail_briefing": "Neural Error: ('invalid_grant: Token has been expired or revoked.', {'error': 'invalid_grant', 'error_description': 'Token has been expired or revoked.'})",
   "leetcode": {
     "total_solved": 250,
     "easy": 138,
@@ -11,25 +11,18 @@
   },
   "github": [
     {
-      "name": "Clinical_MLOPS",
+      "name": "System-Design-VAC",
       "stars": 0,
       "issues": 0,
-      "last_commit": "chore: finalize build and deploymen..",
-      "sha": "3ff1cc3"
-    },
-    {
-      "name": "MUKUNTHANMS007",
-      "stars": 0,
-      "issues": 0,
-      "last_commit": "Revise README with personal and pro..",
-      "sha": "9b56a0d"
+      "last_commit": "feat:workflow init",
+      "sha": "2491049"
     },
     {
       "name": "TUF_SWE_Calendar",
       "stars": 0,
       "issues": 0,
-      "last_commit": "Initial commit",
-      "sha": "cd39261"
+      "last_commit": "docs: add project overview video to..",
+      "sha": "15bd101"
     }
   ],
   "calendar": [
@@ -94,8 +87,15 @@
       "created_at": "2026-04-05T03:24:35.95208+00:00"
     }
   ],
-  "last_synced": 1775581603.0092258,
+  "last_synced": 1775837976.3850775,
   "status": "online",
+  "agent_state": "IDLE",
+  "mood_score": 0.0,
   "active_reminders": [],
-  "spotify_track": "S\u00e3o Paulo - Slowed & Reverb"
+  "spotify_track": "Inactive",
+  "intelligence_briefing": "Neural Error: ('invalid_grant: Token has been expired or revoked.', {'error': 'invalid_grant', 'error_description': 'Token has been expired or revoked.'})",
+  "active_tool": null,
+  "spotify_image": null,
+  "academic_radar": [],
+  "batman_mode_JARVIS_ADMIN": false
 }

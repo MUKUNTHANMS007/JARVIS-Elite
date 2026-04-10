@@ -10,6 +10,7 @@ interface CorePageProps {
   isConnected: boolean;
   isRecording: boolean;
   isThinking: boolean;
+  isSpeaking: boolean;
   messages: any[];
   stats?: any;
   startRecording: () => void;
@@ -29,7 +30,7 @@ interface CorePageProps {
 }
 
 export function CorePage({ 
-  today, isConnected, isRecording, isThinking, messages, stats, 
+  today, isConnected, isRecording, isThinking, isSpeaking, messages, stats, 
   startRecording, stopRecording, reconnect, scrollRef,
   sendTextMessage, isVisionEnabled, videoRef, canvasRef, setActivePage,
   focusData, timerEvent,
@@ -213,7 +214,29 @@ export function CorePage({
           </div>
         </div>
 
+        {/* 2. Visual Synthesis: Video / Theme / Ripple Area */}
         <div className="lg:col-span-5 h-[420px] rounded-[32px] overflow-hidden relative shadow-2xl bg-black border border-white/5">
+          {/* Neural Ripple Effect (Premium Perception layer) */}
+          <AnimatePresence>
+            {(isSpeaking || isSpeakingHint) && (
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
+                <motion.div 
+                  initial={{ scale: 0.8, opacity: 0 }}
+                  animate={{ scale: [0.8, 1.4, 1.6], opacity: [0.4, 0.2, 0] }}
+                  exit={{ opacity: 0 }}
+                  transition={{ repeat: Infinity, duration: 2, ease: "easeOut" }}
+                  className="absolute w-48 h-48 border-2 border-brand-accent/40 rounded-full"
+                />
+                <motion.div 
+                  initial={{ scale: 0.8, opacity: 0 }}
+                  animate={{ scale: [0.8, 1.2, 1.4], opacity: [0.5, 0.25, 0] }}
+                  exit={{ opacity: 0 }}
+                  transition={{ repeat: Infinity, duration: 2, ease: "easeOut", delay: 0.5 }}
+                  className="absolute w-48 h-48 border border-white/30 rounded-full"
+                />
+              </div>
+            )}
+          </AnimatePresence>
           <AnimatePresence mode="wait">
             {!isVisionEnabled ? (
               <motion.img 
@@ -233,7 +256,11 @@ export function CorePage({
                     className="w-full h-full relative"
                 >
                     <video 
-                        ref={videoRef} 
+                        ref={(el) => {
+                          if (el && videoRef.current && el.srcObject !== videoRef.current.srcObject) {
+                            el.srcObject = videoRef.current.srcObject;
+                          }
+                        }}
                         autoPlay 
                         playsInline 
                         muted 

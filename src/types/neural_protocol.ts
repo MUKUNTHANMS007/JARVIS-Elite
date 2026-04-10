@@ -16,9 +16,14 @@ export interface Telemetry {
 export interface DashboardMetrics {
   unread_mail: number;
   spotify_track: string;
-  reminder_count: number;
-  leetcode_status: any;
-  github_pulse: any;
+  reminder_count?: number;
+  leetcode?: any;
+  leetcode_status?: any;
+  github?: any;
+  github_pulse?: any;
+  intelligence_briefing?: string;
+  briefing?: string;
+  is_batman_mode?: boolean;
 }
 
 export interface ProactiveAlert {
@@ -42,6 +47,7 @@ export interface NeuralPacket {
   
   // Display data
   dashboard?: DashboardMetrics;
+  focus?: any;
   
   // Optional payloads
   active_tool?: string;

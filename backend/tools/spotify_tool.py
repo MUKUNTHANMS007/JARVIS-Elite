@@ -130,7 +130,7 @@ def get_current_track_data() -> dict:
     """Retrieve raw info about what is currently playing on Spotify for API use."""
     global _SPOTIFY_RESTRICTED_UNTIL
     
-    # Self-Healing: Retry every 5 minutes to see if Premium has synced
+    # Self-Healing: Retry every 5 minutes if Premium restriction was hit
     if _SPOTIFY_RESTRICTED_UNTIL > 0:
         if time.time() < _SPOTIFY_RESTRICTED_UNTIL:
             return {"status": "restricted"}
@@ -141,10 +141,12 @@ def get_current_track_data() -> dict:
     try:
         sp = get_spotify_client()
         track = sp.current_user_playing_track()
-        if not track or not track["is_playing"]:
+        if not track or not track.get("is_playing"):
             return {"status": "inactive"}
         
-        item = track["item"]
+        item = track.get("item")
+        if not item: return {"status": "inactive"}
+
         return {
             "status": "playing",
             "name": item["name"],
@@ -154,11 +156,12 @@ def get_current_track_data() -> dict:
         }
     except SpotifyException as e:
         if e.http_status == 403:
-            print(f"[Spotify Tool] 403 Restricted (Premium Required). Neural Block Activated for 5 mins.")
-            _SPOTIFY_RESTRICTED_UNTIL = time.time() + 300 # Block for 5 minutes
+            print(f"[Spotify Tool] 403 Restricted (Premium Required). Blocking for 5 mins.")
+            _SPOTIFY_RESTRICTED_UNTIL = time.time() + 300
             return {"status": "restricted"}
         return {"status": "error"}
-    except Exception:
+    except Exception as e:
+        print(f"[Spotify Tool] General Interface Drift: {e}")
         return {"status": "error"}
 
 def search_and_play_spotify(query: str) -> str:

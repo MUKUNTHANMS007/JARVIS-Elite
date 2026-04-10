@@ -1,4 +1,5 @@
-import os, sys, json, asyncio, random, time, psutil, re, logging, hmac, hashlib
+print("[Neural Core] Booting JARVIS Sentinel Protocol...")
+import os, sys, json, asyncio, random, time, psutil, re, logging, hmac, hashlib, uuid, traceback
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from datetime import datetime, timezone
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Response
@@ -9,12 +10,17 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from dotenv import load_dotenv
 from contextlib import asynccontextmanager
+from celery_app import check_redis_connectivity
 
 # --- LOGGING & DIAGNOSTICS ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("JARVIS-CORE")
 
-load_dotenv()
+_BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT = os.path.dirname(_BACKEND_DIR)
+# Load repo-root .env first (what you're using), then backend/.env if present.
+load_dotenv(os.path.join(_REPO_ROOT, ".env"), override=False)
+load_dotenv(os.path.join(_BACKEND_DIR, ".env"), override=False)
 
 # Internal Imports
 from voice.stt import transcribe_audio
@@ -25,6 +31,8 @@ from routers.work import router as work_router
 from routers.calendar import router as calendar_router
 from routers.core import router as core_router
 from routers.evolution import router as evolution_router
+from ws_neural import router as neural_ws_router
+from ws_hub import router as hub_ws_router
 from services.core_service import get_academic_radar, get_today_focus
 from tools.leetcode_tool import get_leetcode_stats
 from tools.gmail_tool import check_gmail_inbox, get_unread_count_raw, get_gmail_briefing
@@ -36,7 +44,10 @@ from services.event_service import focus_connections, broadcast_timer_event
 from services.cache_service import INTELLIGENCE_HUB, update_intelligence, notify_communication, get_intelligence
 from models.protocol import NeuralPacket as PydanticPacket, Telemetry as PydanticTelemetry, DashboardMetrics as PydanticDashboard, ProactiveAlert as PydanticAlert
 import models.neural_protocol_pb2 as pb
-from tasks import process_stt_task, analyze_mood_task, send_dispatch_notification_task, analyze_vision_task
+from tasks import (
+    process_stt_task, analyze_mood_task, send_dispatch_notification_task, analyze_vision_task,
+    _core_stt_logic, _core_mood_logic, _core_dispatch_logic, _core_vision_logic
+)
 
 # --- NEURAL HUB WORKER (Unified Sentinel) ---
 
@@ -53,7 +64,21 @@ async def refresh_intelligence_hub():
                 count = await asyncio.wait_for(asyncio.to_thread(get_unread_count_raw), timeout=15)
                 update_intelligence("gmail_unread", count)
             except Exception: pass
-            await asyncio.sleep(300)
+            await asyncio.sleep(30)
+
+    async def sync_gmail_briefing():
+        """
+        Gmail executive briefing is heavier (Gemini) so we update it less frequently.
+        Also write to both keys for frontend compatibility.
+        """
+        while True:
+            try:
+                briefing = await asyncio.wait_for(asyncio.to_thread(get_gmail_briefing), timeout=25)
+                update_intelligence("gmail_briefing", briefing)
+                update_intelligence("intelligence_briefing", briefing)
+            except Exception:
+                pass
+            await asyncio.sleep(180)
 
     async def sync_leetcode():
         while True:
@@ -76,11 +101,30 @@ async def refresh_intelligence_hub():
             try:
                 calendar_data = await get_calendar_events_db(user_id)
                 reminders_data = await get_active_reminders_db(user_id)
+                academic_raw = await get_academic_radar()
+                
+                # Pre-process academic data for Bento UI consistency
+                today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                upcoming = sorted(
+                    [e for e in academic_raw if e.get("event_date", "") >= today_str],
+                    key=lambda x: x.get("event_date", "")
+                )
+                academic_radar = []
+                for event in upcoming[:3]:
+                    try: 
+                        day_str = str(datetime.strptime(event.get("event_date", ""), "%Y-%m-%d").day)
+                    except: day_str = "??"
+                    academic_radar.append({
+                        "title": event.get("title", "Scheduled Event"),
+                        "date": day_str,
+                        "task_type": event.get("category", "Task")
+                    })
+
                 update_intelligence("calendar", calendar_data)
                 update_intelligence("active_reminders", reminders_data)
+                update_intelligence("academic_radar", academic_radar)
                 
                 now = time.time()
-                today_str = datetime.now().strftime("%Y-%m-%d")
                 for event in calendar_data:
                     if event.get("event_date") == today_str:
                         e_time = event.get("event_time")
@@ -113,6 +157,7 @@ async def refresh_intelligence_hub():
     # Spawn all as independent background tasks
     await asyncio.gather(
         sync_gmail(),
+        sync_gmail_briefing(),
         sync_leetcode(),
         sync_github(),
         sync_calendar_sentinel(),
@@ -122,7 +167,8 @@ async def refresh_intelligence_hub():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # STARTUP
-    await init_db()
+    # --- NON-BLOCKING BOOT: Prevent Supabase/Net hangs from blocking port 8000 ---
+    asyncio.create_task(init_db())
     hub_task = asyncio.create_task(refresh_intelligence_hub())
     logger.info("[Neural Core] Unified Intelligence Online.")
     yield
@@ -134,24 +180,21 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="JARVIS Neural Core", lifespan=lifespan)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
-# --- NEURAL FIREWALL: Trusted Host Filtering ---
+# --- NEURAL FIREWALL: Trusted Host Filtering (Broadened for Loopback Stability) ---
 app.add_middleware(
     TrustedHostMiddleware, 
-    allowed_hosts=["localhost", "127.0.0.1", "*.trycloudflare.com", "0.0.0.0"]
+    allowed_hosts=["*"]
 )
 
-# --- NEURAL FIREWALL: Security Headers ---
-class NeuralSecurityMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        response = await call_next(request)
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
-        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-        response.headers["X-XSS-Protection"] = "1; mode=block"
-        response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com;"
-        return response
-
-app.add_middleware(NeuralSecurityMiddleware)
+# --- NEURAL FIREWALL: Security Headers (@app.middleware skips WebSockets by default) ---
+@app.middleware("http")
+async def neural_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    return response
 
 # --- NEURAL GATEWAY: Restricted CORS ---
 app.add_middleware(
@@ -169,237 +212,52 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- NEURAL WORKERS ---
+# --- WEBSOCKET ROUTERS ---
+app.include_router(neural_ws_router)
+app.include_router(hub_ws_router)
 
-def calculate_audio_energy(audio_data: bytes) -> float:
-    import numpy as np
-    try:
-        audio_np = np.frombuffer(audio_data, dtype=np.int16)
-        if len(audio_np) == 0: return 0.0
-        return np.sqrt(np.mean(audio_np.astype(np.float32)**2))
-    except Exception: return 0.0
-
-async def bridge_tts_worker(websocket: WebSocket, queue: asyncio.Queue):
-    """Feeds audio chunks to client with safety guards."""
-    while True:
-        try:
-            sentence = await queue.get()
-            if sentence is None: break
-            async for fragment in synthesize_speech_stream(sentence.strip()):
-                try:
-                    await websocket.send_bytes(fragment)
-                except Exception: break 
-            queue.task_done()
-        except Exception: break
-
-async def process_agent_turn(websocket: WebSocket, text: str, image_data: str, tts_queue: asyncio.Queue, is_stressed: bool = False, lock: asyncio.Lock = None):
-    """Observer Pattern: LLM Stream -> UI Text -> TTS Queue with Turn Locking and Mood."""
-    if lock: await lock.acquire()
-    try:
-        await websocket.send_json({"type": "TURN_START", "mood": "stressed" if is_stressed else "normal"})
-        
-        # --- NEURAL ORCHESTRATOR: Multi-Modal Offloading ---
-        vision_context = ""
-        if image_data:
-            vision_job = analyze_vision_task.delay(image_data, context_text=text)
-            # Parallel processing: Continue conversation while vision arrives
-            # vision_res = vision_job.get(timeout=5)
-            # vision_context = vision_res.get("insight", "")
-
-        sentence_buffer = ""
-        token_count = 0
-        first_chunk = True
-        
-        async for token in get_agent_response_stream(text, image_base64=image_data, is_stressed=is_stressed):
-            if websocket.client_state.name != "CONNECTED": break
-            await websocket.send_json({"type": "TEXT_CHUNK", "text": token})
-            sentence_buffer += token
-            token_count += 1
-            
-            # Sentence segmenting for natural TTS flow
-            is_punctuation = any(sentence_buffer.endswith(p) for p in [". ", "? ", "! ", "\n", ", ", "; "])
-            threshold = 6 if first_chunk else 4
-            if is_punctuation or token_count >= threshold:
-                clean = sentence_buffer.strip()
-                if len(clean) > 1:
-                    await tts_queue.put(clean)
-                    first_chunk = False
-                    sentence_buffer = ""
-                    token_count = 0
-        if sentence_buffer.strip():
-            await tts_queue.put(sentence_buffer.strip())
-    except Exception as e: logger.error(f"[Turn Error] {e}")
-    finally:
-        if websocket.client_state.name == "CONNECTED":
-            await websocket.send_json({"type": "TURN_COMPLETE"})
-        if lock: lock.release()
-
-@app.websocket("/ws/voice")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    tts_queue = asyncio.Queue()
-    worker_task = asyncio.create_task(bridge_tts_worker(websocket, tts_queue))
-    audio_buffer = bytearray()
-    image_data = None
-    turn_lock = asyncio.Lock()
-    
-    try:
-        while True:
-            data = await websocket.receive()
-            if "bytes" in data:
-                audio_buffer.extend(data["bytes"])
-            elif "text" in data:
-                msg = json.loads(data["text"])
-                m_type = msg.get("type")
-                if m_type == "text_input":
-                    asyncio.create_task(process_agent_turn(websocket, msg.get("text"), msg.get("image") or image_data, tts_queue, lock=turn_lock))
-                elif m_type == "stop_recording":
-                    # --- NEURAL ORCHESTRATOR: Async Task Offloading ---
-                    audio_hex = audio_buffer.hex()
-                    energy = calculate_audio_energy(bytes(audio_buffer))
-                    
-                    # 1. Offload Mood Analysis
-                    mood_job = analyze_mood_task.delay(energy)
-                    
-                    # 2. Offload STT Transcription
-                    stt_job = process_stt_task.delay(audio_hex)
-                    
-                    # Wait for high-priority STT result (Simulation of Queue -> Backend flow)
-                    # In true high-scale, we would use a webhook or polling
-                    result = stt_job.get(timeout=10)
-                    user_text = result.get("text", "")
-                    
-                    if user_text:
-                        mood_res = mood_job.get(timeout=2)
-                        is_stressed = mood_res.get("is_stressed", False)
-                        
-                        await websocket.send_json({"type": "TRANSCRIPTION", "text": user_text})
-                        asyncio.create_task(process_agent_turn(
-                            websocket, 
-                            user_text, 
-                            image_data, 
-                            tts_queue, 
-                            is_stressed=is_stressed, 
-                            lock=turn_lock
-                        ))
-                    audio_buffer.clear()
-                elif m_type == "PING":
-                    await websocket.send_json({"type": "PONG", "timestamp": time.time()})
-    except WebSocketDisconnect: pass
-    finally:
-        worker_task.cancel()
-        try: await websocket.close()
-        except Exception: pass
-
-@app.websocket("/ws/system")
-async def system_socket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    async def telemetry_pusher():
-        _slow_tick = 0
-        try:
-            while True:
-                hub = get_intelligence()
-                focus = await get_focus_session_data()
-                _slow_tick += 1
-                if _slow_tick >= 4:
-                    _slow_tick = 0
-                    try:
-                        spotify = await asyncio.to_thread(get_current_track_data)
-                        update_intelligence("spotify_track", spotify.get("name", "Standby") if isinstance(spotify, dict) else "Standby")
-                    except Exception: pass
-
-                # 1. Fetch Proactive Alerts from Hub (Injected by Edge Sentinel)
-                proactive_alert = None
-                triggers = hub.get("proactive_triggers", {})
-                if triggers:
-                    # Pick the most recent trigger
-                    trigger_keys = sorted(triggers.keys(), key=lambda x: triggers[x].get("timestamp", 0))
-                    if trigger_keys:
-                        latest_key = trigger_keys[-1]
-                        t_data = triggers[latest_key]
-                        proactive_alert = PydanticAlert(
-                            id=latest_key,
-                            type=t_data["type"],
-                            title=t_data["title"],
-                            message=t_data.get("message", "High Priority System Notice"),
-                            timestamp=t_data["timestamp"],
-                            priority=t_data.get("priority", "NORMAL")
-                        )
-                        # Remove alert after sending to prevent repeated notifications
-                        triggers.pop(latest_key)
-                        update_intelligence("proactive_triggers", triggers)
-
-                # Build Neural Packet (Pydantic for internal handling)
-                p_packet = PydanticPacket(
-                    type="NEURAL_PULSE",
-                    state=hub.get("agent_state", "IDLE"),
-                    telemetry=PydanticTelemetry(
-                        cpu_percent=psutil.cpu_percent(),
-                        ram_percent=psutil.virtual_memory().percent,
-                        mood_score=hub.get("mood_score", 0.0),
-                        is_online=True
-                    ),
-                    dashboard=PydanticDashboard(
-                        unread_mail=hub.get("gmail_unread", 0),
-                        spotify_track=hub.get("spotify_track", "Standby"),
-                        reminder_count=len(hub.get("active_reminders", [])),
-                        leetcode_status=hub.get("leetcode"),
-                        github_pulse=hub.get("github")
-                    ),
-                    alert=proactive_alert
-                )
-
-                # 1. OPTIMIZED: Protobuf Serialization (Binary)
-                try:
-                    pb_packet = pb.NeuralPacket()
-                    pb_packet.type = p_packet.type
-                    pb_packet.timestamp = p_packet.timestamp
-                    pb_packet.state = getattr(pb, p_packet.state)
-                    
-                    pb_packet.telemetry.cpu_percent = p_packet.telemetry.cpu_percent
-                    pb_packet.telemetry.ram_percent = p_packet.telemetry.ram_percent
-                    pb_packet.telemetry.mood_score = p_packet.telemetry.mood_score
-                    pb_packet.telemetry.is_online = p_packet.telemetry.is_online
-                    
-                    pb_packet.dashboard.unread_mail = p_packet.dashboard.unread_mail
-                    pb_packet.dashboard.spotify_track = p_packet.dashboard.spotify_track
-                    pb_packet.dashboard.reminder_count = p_packet.dashboard.reminder_count
-                    
-                    if p_packet.dashboard.leetcode_status:
-                        pb_packet.dashboard.leetcode_status_json = json.dumps(p_packet.dashboard.leetcode_status)
-                    if p_packet.dashboard.github_pulse:
-                        pb_packet.dashboard.github_pulse_json = json.dumps(p_packet.dashboard.github_pulse)
-                    
-                    if p_packet.active_tool:
-                        pb_packet.active_tool = p_packet.active_tool
-                    
-                    if p_packet.alert:
-                        pb_packet.alert.id = p_packet.alert.id
-                        pb_packet.alert.type = p_packet.alert.type
-                        pb_packet.alert.title = p_packet.alert.title
-                        pb_packet.alert.message = p_packet.alert.message
-                        pb_packet.alert.timestamp = p_packet.alert.timestamp
-                        pb_packet.alert.priority = p_packet.alert.priority
-
-                    # Send binary to client
-                    await websocket.send_bytes(pb_packet.SerializeToString())
-                except Exception as e:
-                    # Fallback to JSON if Proto fails
-                    logger.error(f"[Neural Protocol] Proto Drift: {e}")
-                    await websocket.send_json(p_packet.dict())
-
-                await asyncio.sleep(1) # Peak frequency
-        except Exception: pass
-    try: await telemetry_pusher()
-    except WebSocketDisconnect: pass
 
 # --- REST API ROUTES ---
 
 app.include_router(briefing_router, prefix="/api/briefing")
 app.include_router(work_router, prefix="/api/work")
 app.include_router(calendar_router, prefix="/api/calendar")
-app.include_router(core_router, prefix="/api/core")
+app.include_router(core_router, prefix="/api/routine")
 app.include_router(evolution_router, prefix="/api/evolution")
+
+def _system_status_snapshot(hub: dict) -> dict:
+    """Builds a compact system status object for initial sync/UI."""
+    try:
+        battery = psutil.sensors_battery()
+        b_percent = battery.percent if battery else 100
+        is_plugged = battery.power_plugged if battery else True
+        
+        return {
+            "status": "online",
+            "cpu": psutil.cpu_percent(),
+            "ram": psutil.virtual_memory().percent,
+            "disk": psutil.disk_usage('/').percent,
+            "temp": 0,
+            "uptime": f"{int((time.time() - psutil.boot_time()) // 3600)}h",
+            "energy": b_percent,
+            "battery_percent": b_percent,
+            "power_plugged": is_plugged,
+            "services": []
+        }
+    except Exception:
+        return {"status": "online", "cpu": 0, "ram": 0, "disk": 0, "temp": 0, "uptime": "0m", "energy": 0, "services": []}
+
+# --- INITIAL SYNC (Frontend bootstrap) ---
+@app.get("/api/sync")
+async def sync():
+    hub = get_intelligence()
+    system = _system_status_snapshot(hub)
+    # Focus is computed elsewhere; returned for forward-compat without breaking current UI.
+    try:
+        focus = await get_focus_session_data()
+    except Exception:
+        focus = None
+    return {"intelligence": hub, "system": system, "focus": focus}
 
 # --- NEURAL EDGE: Proactive Sentinel Receiver ---
 @app.post("/api/neural/edge-trigger")
@@ -431,6 +289,7 @@ async def edge_trigger(request: Request):
             current_triggers = hub.get("proactive_triggers", {})
             
             timestamp = time.time()
+            trigger_id = str(uuid.uuid4())
             current_triggers[trigger_id] = {
                 "type": "MEETING_ALERT",
                 "title": title,
@@ -441,11 +300,19 @@ async def edge_trigger(request: Request):
             update_intelligence("proactive_triggers", current_triggers)
             
             # --- NEURAL DISPATCHER: Async Mobile Push ---
-            send_dispatch_notification_task.delay(
-                title=f"Sentinel Trigger: {title}",
-                message=f"I've detected a high-priority event approaching: {title}",
-                priority=4 # High priority
-            )
+            try:
+                send_dispatch_notification_task.delay(
+                    title=f"Sentinel Trigger: {title}",
+                    message=f"I've detected a high-priority event approaching: {title}",
+                    priority=4 # High priority
+                )
+            except Exception:
+                # Fallback to direct push if Celery is down
+                _core_dispatch_logic(
+                    title=f"Sentinel Trigger: {title}",
+                    message=f"I've detected a high-priority event approaching: {title}",
+                    priority=4
+                )
             
             # Real-time Broadcast: Notify all system socket listeners
             return {"status": "INJECTED", "id": trigger_id, "dispatched": True}

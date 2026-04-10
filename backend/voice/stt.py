@@ -1,135 +1,101 @@
-from groq import AsyncGroq
 import tempfile
 import os
-import io
 import asyncio
 from datetime import datetime
+from groq import AsyncGroq
 
-# Initialize Groq client — Ensure your GROQ_API_KEY is in .env
-client = AsyncGroq(api_key=os.environ.get("GROQ_API_KEY"))
+# --- Configuration ---
+STT_PROVIDER = (os.environ.get("STT_PROVIDER") or "").strip().lower()
+LOCAL_STT_MODEL = os.environ.get("LOCAL_STT_MODEL", "small.en")
+LOCAL_STT_DEVICE = os.environ.get("LOCAL_STT_DEVICE", "auto")
+LOCAL_STT_COMPUTE_TYPE = os.environ.get("LOCAL_STT_COMPUTE_TYPE", "auto")
 
-async def correct_transcription(raw_text: str) -> str:
-    """
-    Neural Correction Layer: Uses a fast LLM to 'polish' phonetic mishearings.
-    Tuned to JARVIS's command set and Mukunthan's environment.
-    """
-    if not raw_text or len(raw_text) < 3:
-        return raw_text
+def _get_groq_client() -> AsyncGroq | None:
+    api_key = os.environ.get("GROQ_API_KEY")
+    return AsyncGroq(api_key=api_key) if api_key else None
 
-    system_prompt = """
-    # ROLE: Neural Phonetic Corrector (J.A.R.V.I.S. Core)
-    Fix common Whisper transcription errors for voice commands.
-    
-    # RULES:
-    - STRICTLY ONLY return the corrected text.
-    - No explanations, no "Corrected transcription:", no quotes.
-    - Do not truncate, summarize, or shorten the input; return the full corrected sentence.
-    - If it's already correct, return it exactly as is.
-    - Fix phonetically similar words (e.g., 'Open home' -> 'Open Chrome', 'Meat' -> 'Meeting', 'Let code' -> 'LeetCode').
-    
-    # CONTEXT: 
-    User: Mukunthan
-    Projects: AetherPrep, Virelo, Jarvis, Bento-Grid
-    Tools: LeetCode, GitHub, Spotify, Gmail, Calendar, Notion
-    Commands: "Open Chrome", "What are my schedules", "Sync Hub", "Neural Link", "Pulse check"
-    """
-    
+_local_whisper_model = None
+def _get_local_whisper_model():
+    global _local_whisper_model
+    if _local_whisper_model is not None:
+        return _local_whisper_model
     try:
-        completion = await client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Fix this transcription: {raw_text}"}
-            ],
-            temperature=0.0,
-            max_tokens=64
+        from faster_whisper import WhisperModel
+        # Setting cpu_threads for speed on local systems
+        _local_whisper_model = WhisperModel(
+            LOCAL_STT_MODEL,
+            device=LOCAL_STT_DEVICE,
+            compute_type=LOCAL_STT_COMPUTE_TYPE,
+            cpu_threads=4 
         )
-        corrected = completion.choices[0].message.content.strip()
-        # Remove any unwanted quotes if added by the LLM
-        return corrected.strip('"').strip("'")
-    except Exception as e:
-        print(f"[STT] Neural Correction Bypass: {e}")
-        return raw_text
+        return _local_whisper_model
+    except ImportError:
+        raise RuntimeError("faster-whisper not installed.")
+
+def _choose_provider() -> str:
+    if STT_PROVIDER in {"groq", "local"}:
+        return STT_PROVIDER
+    return "groq" if os.environ.get("GROQ_API_KEY") else "local"
 
 async def transcribe_audio(audio_bytes: bytes) -> str:
-    """
-    Ultra-low latency STT using Groq's Whisper-large-v3-turbo plus Neural Correction.
-    Optimized for JARVIS's voice-command pipeline with direct file-handle streaming.
-    """
-    # 1. Noise Filter: If the clip is too short or empty, kill it early.
-    if not audio_bytes or len(audio_bytes) < 1000:  
+    if not audio_bytes or len(audio_bytes) < 1000:
         return ""
 
-    # 2. Advanced Format Detection (Magic Bytes)
-    if audio_bytes.startswith(b'\x1a\x45\xdf\xa3'):
-        suffix = ".webm"
-    elif audio_bytes.startswith(b'OggS'):
-        suffix = ".ogg"
-    elif audio_bytes.startswith(b'fLaC'):
-        suffix = ".flac"
-    elif audio_bytes.startswith(b'RIFF'):
-        suffix = ".wav"
-    else:
-        suffix = ".webm" 
+    # 1. Format Detection
+    suffix = ".webm"
+    if audio_bytes.startswith(b'\x1a\x45\xdf\xa3'): suffix = ".webm"
+    elif audio_bytes.startswith(b'OggS'): suffix = ".ogg"
+    elif audio_bytes.startswith(b'fLaC'): suffix = ".flac"
+    elif audio_bytes.startswith(b'RIFF'): suffix = ".wav"
 
-    # 3. Fail-Fast Monitoring (Engineer-Level Diagnostics)
     start_time = datetime.now()
-    audio_size_kb = len(audio_bytes) / 1024
-    print(f"[STT] Processing {audio_size_kb:.2f} KB stream (Format: {suffix})...")
-
     tmp_path = None
+    
     try:
-        # Create temp file for Groq SDK
+        # 2. Critical Fix: Close the file handle BEFORE passing path to model
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp.write(audio_bytes)
             tmp_path = tmp.name
+        
+        provider = _choose_provider()
 
-        # CRITICAL FIX: Pass the file handle directly to allow SDK-level streaming
-        with open(tmp_path, "rb") as f:
-            response = await asyncio.wait_for(
-                client.audio.transcriptions.create(
-                    model="whisper-large-v3-turbo",
-                    file=(tmp_path, f), # SDK handles the multipart stream from the handle
-                    language="en",
-                    prompt="JARVIS, AetherPrep, Virelo, Mukunthan, LeetCode, GitHub, Notion, Spotify, WhatsApp, FastAPI, React, Bento-Grid, Pulse check.",
-                    response_format="json", 
-                    temperature=0.0
-                ),
-                timeout=8.0
-            )
+        if provider == "local":
+            model = _get_local_whisper_model()
+            def _run_local():
+                # Fix: Convert segments generator to a list to force execution
+                segments, _ = model.transcribe(tmp_path, language="en", vad_filter=True)
+                return " ".join(seg.text.strip() for seg in segments).strip()
+            raw_text = await asyncio.to_thread(_run_local)
+        
+        else:
+            client = _get_groq_client()
+            if not client: return ""
             
-        # 4. Neural Post-Correction (Contextual Awareness)
-        raw_text = response.text.strip() if hasattr(response, 'text') else str(response).strip()
-        duration_whisper = (datetime.now() - start_time).total_seconds()
-        
-        # --- NEURAL BYPASS: Skip correction for very short or clear phrases to save ~1s ---
-        if len(raw_text) < 15:
-            print(f"[STT] High-Confidence Bypass: \"{raw_text}\" ({duration_whisper:.2f}s)")
-            return raw_text
+            with open(tmp_path, "rb") as f:
+                response = await asyncio.wait_for(
+                    client.audio.transcriptions.create(
+                        model="whisper-large-v3-turbo",
+                        file=(tmp_path, f),
+                        language="en",
+                        prompt="JARVIS, Mukunthan, LeetCode, GitHub, Spotify, FastAPI, React.",
+                        response_format="json",
+                        temperature=0.0
+                    ),
+                    timeout=10.0
+                )
+                # Fix: Properly handle Groq's response object
+                raw_text = response.text.strip() if hasattr(response, 'text') else response.get('text', '')
 
-        corrected_text = await correct_transcription(raw_text)
-        duration_total = (datetime.now() - start_time).total_seconds()
-        
-        print(f"[STT] Raw: \"{raw_text[:50]}\" ({duration_whisper:.2f}s)")
-        print(f"[STT] Neural Corrected: \"{corrected_text[:50]}\" (Total: {duration_total:.2f}s)")
-        
-        return corrected_text
+        duration = (datetime.now() - start_time).total_seconds()
+        print(f"[STT] {provider.upper()} Success: \"{raw_text[:40]}...\" ({duration:.2f}s)")
+        return raw_text
 
-    except asyncio.TimeoutError:
-        print("[STT] Error: Transcription timed out after 8s.")
-        return ""
     except Exception as e:
-        print(f"[STT] Groq Transcription Error: {e}")
+        print(f"[STT] Error: {e}")
         return ""
     finally:
-        # Clean up the temp file
         if tmp_path and os.path.exists(tmp_path):
-            try:
-                os.unlink(tmp_path)
-            except Exception:
-                pass
+            os.remove(tmp_path)
 
 if __name__ == "__main__":
-    # Test with empty buffer
-    import asyncio
     print(asyncio.run(transcribe_audio(b"")))

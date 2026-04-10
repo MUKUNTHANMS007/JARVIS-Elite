@@ -4,6 +4,7 @@ from typing import AsyncGenerator
 from groq import Groq
 from dotenv import load_dotenv
 from datetime import datetime
+import httpx
 
 load_dotenv()
 
@@ -40,7 +41,35 @@ logging.basicConfig(
 logger = logging.getLogger("NeuralCore")
 
 # Initialize Groq
-groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
+_groq_api_key = os.environ.get("GROQ_API_KEY")
+groq_client = Groq(api_key=_groq_api_key) if _groq_api_key else None
+
+OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/")
+LOCAL_LLM_MODEL = os.environ.get("LOCAL_LLM_MODEL", "gemma4")
+
+async def _ollama_chat_stream(messages, model: str) -> AsyncGenerator[str, None]:
+    """
+    Local LLM fallback using Ollama streaming API.
+    Expects Ollama running at OLLAMA_HOST and `model` pulled locally.
+    """
+    payload = {
+        "model": model,
+        "stream": True,
+        "messages": messages,
+    }
+    async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, read=60.0)) as client:
+        async with client.stream("POST", f"{OLLAMA_HOST}/api/chat", json=payload) as resp:
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line:
+                    continue
+                try:
+                    evt = json.loads(line)
+                except Exception:
+                    continue
+                delta = (evt.get("message") or {}).get("content") or ""
+                if delta:
+                    yield delta
 
 # --- UNIFIED TOOL REGISTRY (Master Scrub 1.0) ---
 
@@ -256,7 +285,7 @@ async def update_cached_history(user_id: str, user_text: str, response: str):
 # ---------------------------------------------
 
 async def get_agent_response_stream(user_text: str, user_id: str = "JARVIS_ADMIN", image_base64: str = None, is_stressed: bool = False) -> AsyncGenerator[str, None]:
-    system_prompt = get_jarvis_prompt()
+    system_prompt = get_jarvis_prompt(user_id)
     if is_stressed:
         system_prompt += "\n# MOOD PROTOCOL: User is stressed or in a rush. Skip pleasantries. Provide grounding, concise, and direct answers immediately."
     
@@ -289,50 +318,70 @@ async def get_agent_response_stream(user_text: str, user_id: str = "JARVIS_ADMIN
         assistant_content = ""
         tool_calls_data = []
         
-        # Phase III.1: Smart Gating
-        is_visual = any(k in user_text.lower() for k in ["see", "look", "this", "screen", "visual", "webcam", "identify", "analyze"])
-        model_to_use = "llama-3.2-11b-vision-preview" if (image_base64 and is_visual) else "llama-3.3-70b-versatile"
+        # Phase III.1: Smart Gating (Vision vs Logic)
+        vision_keywords = ["see", "look", "screen", "visual", "webcam", "identify", "analyze", "find", "check", "observe", "watch"]
+        is_visual = any(k in user_text.lower() for k in vision_keywords) or (image_base64 is not None and len(user_text) < 50)
         
+        # Select Model: Use Vision for observation, Versatile (70B) for deep logic
+        model_to_use = "llama-3.2-11b-vision-preview" if (image_base64 and is_visual) else "llama-3.3-70b-versatile"
+
+        # If Groq isn't configured, use local LLM and skip tool calls.
+        use_local_llm = groq_client is None
+
         # 1-Turn Relay: Vision models often fail when tools are present in the same TURN.
-        tools_for_turn = None if "vision" in model_to_use else GROQ_TOOLS
+        tools_for_turn = None if (use_local_llm or "vision" in model_to_use) else GROQ_TOOLS
         tool_choice_for_turn = None if tools_for_turn is None else "auto"
 
         try:
-            response = groq_client.chat.completions.create(
-                model=model_to_use, messages=messages, tools=tools_for_turn,
-                tool_choice=tool_choice_for_turn, stream=True, max_tokens=500, temperature=0.7
-            )
-            
             # PRESENCE PING: Ensures the UI stays active immediately.
-            yield "" 
+            yield ""
 
-            stream_buffer = ""
-            for chunk in response:
-                if not chunk.choices: continue
-                delta = chunk.choices[0].delta
-                
-                if delta.content:
-                    assistant_content += delta.content
-                    full_text += delta.content
-                    stream_buffer += delta.content
-                    
+            if use_local_llm:
+                stream_buffer = ""
+                async for token in _ollama_chat_stream(messages, LOCAL_LLM_MODEL):
+                    assistant_content += token
+                    full_text += token
+                    stream_buffer += token
                     if " " in stream_buffer or "\n" in stream_buffer:
-                        # Targeted Stripper
                         clean_chunk = re.sub(r'<function=.*?>.*?</function>', '', stream_buffer, flags=re.DOTALL)
-                        if clean_chunk: yield clean_chunk
+                        if clean_chunk:
+                            yield clean_chunk
                         stream_buffer = ""
-                
-                if delta.tool_calls:
-                    for tc_delta in delta.tool_calls:
-                        while len(tool_calls_data) <= tc_delta.index:
-                            tool_calls_data.append({"id": "", "name": "", "args": ""})
-                        if tc_delta.id: tool_calls_data[tc_delta.index]["id"] = tc_delta.id
-                        if tc_delta.function:
-                            if tc_delta.function.name: tool_calls_data[tc_delta.index]["name"] = tc_delta.function.name
-                            if tc_delta.function.arguments: tool_calls_data[tc_delta.index]["args"] += tc_delta.function.arguments
+                if stream_buffer:
+                    yield re.sub(r'<function=.*?>.*?</function>', '', stream_buffer, flags=re.DOTALL)
+            else:
+                response = groq_client.chat.completions.create(
+                    model=model_to_use, messages=messages, tools=tools_for_turn,
+                    tool_choice=tool_choice_for_turn, stream=True, max_tokens=500, temperature=0.7
+                )
 
-            if stream_buffer:
-                yield re.sub(r'<function=.*?>.*?</function>', '', stream_buffer, flags=re.DOTALL)
+                stream_buffer = ""
+                for chunk in response:
+                    if not chunk.choices: continue
+                    delta = chunk.choices[0].delta
+                    
+                    if delta.content:
+                        assistant_content += delta.content
+                        full_text += delta.content
+                        stream_buffer += delta.content
+                        
+                        if " " in stream_buffer or "\n" in stream_buffer:
+                            # Targeted Stripper
+                            clean_chunk = re.sub(r'<function=.*?>.*?</function>', '', stream_buffer, flags=re.DOTALL)
+                            if clean_chunk: yield clean_chunk
+                            stream_buffer = ""
+                    
+                    if delta.tool_calls:
+                        for tc_delta in delta.tool_calls:
+                            while len(tool_calls_data) <= tc_delta.index:
+                                tool_calls_data.append({"id": "", "name": "", "args": ""})
+                            if tc_delta.id: tool_calls_data[tc_delta.index]["id"] = tc_delta.id
+                            if tc_delta.function:
+                                if tc_delta.function.name: tool_calls_data[tc_delta.index]["name"] = tc_delta.function.name
+                                if tc_delta.function.arguments: tool_calls_data[tc_delta.index]["args"] += tc_delta.function.arguments
+
+                if stream_buffer:
+                    yield re.sub(r'<function=.*?>.*?</function>', '', stream_buffer, flags=re.DOTALL)
 
         except Exception as e:
             err_msg = f"[Neural Core] Handshake Collision: {str(e)}"

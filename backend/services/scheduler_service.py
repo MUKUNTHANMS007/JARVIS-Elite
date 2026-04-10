@@ -12,6 +12,7 @@ import asyncio
 from datetime import date, datetime, timezone
 from agent.memory import supabase, init_db
 from tools.leetcode_tool import generate_placement_schedule, get_enriched_daily
+from services.cache_service import update_intelligence
 
 async def get_supabase():
     global supabase
@@ -101,6 +102,9 @@ async def mark_problem_completed(db_id: str, user_id: str = "JARVIS_ADMIN") -> b
             .execute()
 
         print(f"[Scheduler] Problem {db_id} marked as COMPLETED at {now}")
+        
+        # REFRESH HUB: Force immediate dashboard sync for LeetCode status
+        update_intelligence("leetcode_refresh_trigger", now)
         return True
 
     except Exception as e:

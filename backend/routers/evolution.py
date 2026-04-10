@@ -4,7 +4,7 @@ from services.evolution_service import get_or_generate_evolution_challenge, veri
 from voice.tts import synthesize_speech
 import json
 
-router = APIRouter(prefix="/api/evolution", tags=["Evolution"])
+router = APIRouter()
 
 @router.get("/today")
 async def get_today_challenge(lang: str = "python"):

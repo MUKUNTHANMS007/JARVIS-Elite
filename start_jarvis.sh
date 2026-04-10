@@ -25,21 +25,26 @@ lsof -ti:8001 | xargs kill -9 2>/dev/null || true
 
 # Launch Neural Core (P8000)
 # This core handles heavy AI, Voice, and Agent logic.
-echo "[Neural Core] Starting on port 8000 (AI/Voice)..."
-python -u backend/server1_neural.py &
-NC_PID=$!
+echo "[Neural Core] Starting FastAPI on port 8000..."
+python -u backend/main.py &
+API_PID=$!
 
-# Launch Intelligence Hub (P8001)
-# This hub handles sync, telemetry, and frontend pulse.
-echo "[Intel Hub] Starting on port 8001 (Data/Sync)..."
-python -u backend/server2_hub.py &
-IH_PID=$!
+# Launch Neural Worker (Celery)
+echo "[Neural Worker] Starting Celery Worker..."
+cd backend && celery -A celery_app worker --loglevel=info --pool=solo & 
+CELERY_PID=$!
+cd ..
 
-echo "[JARVIS] Systems Online. NC_PID: $NC_PID | IH_PID: $IH_PID"
-echo "[JARVIS] Neural Pulse active. Press Ctrl+C to terminate both servers."
+# Launch Frontend (P3001)
+echo "[Frontend] Starting Vite server on port 3001..."
+npm run dev &
+FE_PID=$!
+
+echo "[JARVIS] Systems Online. API_PID: $API_PID | CELERY_PID: $CELERY_PID | FE_PID: $FE_PID"
+echo "[JARVIS] Neural Pulse active. Press Ctrl+C to terminate all processes."
 
 # Trap exit signals to ensure clean shutdown
-trap "echo '[JARVIS] Powering down...'; kill $NC_PID $IH_PID 2>/dev/null || true; exit" SIGINT SIGTERM
+trap "echo '[JARVIS] Powering down...'; kill $API_PID $CELERY_PID $FE_PID 2>/dev/null || true; exit" SIGINT SIGTERM
 
 # Stay active while servers run
 wait

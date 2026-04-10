@@ -223,15 +223,19 @@ async def sync_leetcode_intelligence(sync: bool = False):
             focus_msg = f"focus on: {', '.join(focus_tags)}" if focus_tags else "mastering Hard patterns"
 
             local_streak = await get_leetcode_streak_db("JARVIS_ADMIN")
-            streak_res = await client.get(f"{BASE_URL}/{USERNAME}/streak")
+            streak_res = await client.get(f"{BASE_URL}/user/{USERNAME}/streak")
             external_streak = streak_res.json().get("streak", 0) if streak_res.status_code == 200 else 0
             streak = max(local_streak, external_streak)
+            
+            # --- Daily Challenge Enrichment ---
+            daily_problem = await get_enriched_daily()
             streak_alert = " Your streak has reset in the War-Room. Regain momentum immediately." if streak == 0 else ""
 
             return {
                 "total": total_solved, "easy": easy_solved,
                 "medium": medium_solved, "hard": hard_solved,
                 "streak": streak, "focus_areas": focus_tags,
+                "daily_problem": daily_problem,
                 "message": f"Sir, solved: {total_solved}. Recommend we {focus_msg}.{streak_alert}"
             }
         except Exception as e:
