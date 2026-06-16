@@ -158,6 +158,24 @@ async def refresh_intelligence_hub():
                 except Exception: pass
             await asyncio.sleep(300)
 
+    async def sync_spotify():
+        while True:
+            try:
+                data = await asyncio.wait_for(asyncio.to_thread(get_current_track_data), timeout=10)
+                status = data.get("status")
+                if status == "playing":
+                    update_intelligence("spotify_track", data.get("name"))
+                    update_intelligence("spotify_image", data.get("image_url"))
+                elif status == "restricted":
+                    update_intelligence("spotify_track", "Premium Required")
+                    update_intelligence("spotify_image", None)
+                else: # inactive or error
+                    update_intelligence("spotify_track", "Inactive")
+                    update_intelligence("spotify_image", None)
+            except Exception as e:
+                logger.debug(f"[Neural Hub] Spotify sync drift: {e}")
+            await asyncio.sleep(5)
+
     # Spawn all as independent background tasks
     await asyncio.gather(
         sync_gmail(),
@@ -165,8 +183,10 @@ async def refresh_intelligence_hub():
         sync_leetcode(),
         sync_github(),
         sync_calendar_sentinel(),
-        sync_cloud_mirror()
+        sync_cloud_mirror(),
+        sync_spotify()
     )
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
