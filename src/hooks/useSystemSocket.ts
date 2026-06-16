@@ -31,6 +31,7 @@ export function useSystemSocket(url: string) {
   const ws = useRef<WebSocket | null>(null);
   const retryCount = useRef(0);
   const retryTimer = useRef<number | undefined>(undefined);
+  const shouldReconnect = useRef(true);
   const MAX_RETRIES = 10;
 
   const [packet, setPacket] = useState<SystemPacket | null>(null);
@@ -38,6 +39,8 @@ export function useSystemSocket(url: string) {
   const [latency, setLatency] = useState<number>(0);
 
   const connect = useCallback(() => {
+    if (ws.current?.readyState === WebSocket.OPEN || ws.current?.readyState === WebSocket.CONNECTING) return;
+
     const socket = new WebSocket(url);
     ws.current = socket;
 
@@ -62,7 +65,7 @@ export function useSystemSocket(url: string) {
 
     socket.onclose = (e) => {
       setIsConnected(false);
-      if (e.code !== 1000 && retryCount.current < MAX_RETRIES) {
+      if (shouldReconnect.current && retryCount.current < MAX_RETRIES) {
         const delay = Math.min(1000 * 2 ** retryCount.current, 30000);
         retryCount.current++;
         retryTimer.current = window.setTimeout(connect, delay);
@@ -73,8 +76,10 @@ export function useSystemSocket(url: string) {
   }, [url]);
 
   useEffect(() => {
+    shouldReconnect.current = true;
     connect();
     return () => {
+      shouldReconnect.current = false;
       clearTimeout(retryTimer.current);
       ws.current?.close(1000);
     };

@@ -1,4 +1,5 @@
 import os
+os.environ['OAUTHLIB_RELAX_TOKEN_SCOPE'] = '1'
 import base64
 import google.genai as genai
 from email.mime.text import MIMEText
@@ -6,7 +7,7 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-SCOPES = ['https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/gmail.send']
+SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 
 # --- JARVIS Intelligence Brain ---
 # Using the stable 2026 'google.genai' SDK
@@ -37,7 +38,8 @@ def get_jarvis_email_briefing() -> str:
     """
     try:
         service = get_gmail_service()
-        if not service: return "Sir, I'm unable to access your terminal for Gmail sync."
+        if not service:
+            return "GREETING| Sir, the biometric handshake for your Gmail terminal has expired.\nITEM| SECURITY | Re-authentication Required\nITEM| SYSTEM | Sync Drift Detected (Token Revoked)"
 
         results = service.users().messages().list(userId='me', q='category:primary', maxResults=15).execute()
         messages = results.get('messages', [])
@@ -46,10 +48,19 @@ def get_jarvis_email_briefing() -> str:
             return "Your primary inbox is pristine, Sir. No action required."
 
         from concurrent.futures import ThreadPoolExecutor
+        import httplib2
+        import google_auth_httplib2
+
+        # Extract pre-validated credentials from the main service object
+        creds = service._http.credentials
 
         def fetch_msg_metadata(msg_id):
             try:
-                m = service.users().messages().get(
+                # Create thread-specific HTTP client and Service resource to avoid SSL sharing issues
+                http_client = google_auth_httplib2.AuthorizedHttp(creds, http=httplib2.Http())
+                thread_service = build('gmail', 'v1', http=http_client, static_discovery=True)
+                
+                m = thread_service.users().messages().get(
                     userId='me', id=msg_id, format='metadata', 
                     metadataHeaders=['Subject', 'From']
                 ).execute()
@@ -60,15 +71,17 @@ def get_jarvis_email_briefing() -> str:
             except:
                 return None
 
-        # Execute Parallel Fetching (Sub-1s sync vs 5s+ serial)
+        # Execute Parallel Fetching
         with ThreadPoolExecutor(max_workers=10) as executor:
             raw_data = list(filter(None, executor.map(fetch_msg_metadata, [m['id'] for m in messages])))
 
-        if not raw_data: return "Inbox scanned. No primary updates found."
+        if not raw_data: 
+            return "GREETING| I've scanned your primary communication layer, Sir.\nITEM| STATUS | No Urgent Updates Found\nITEM| INBOX | Primary Tab Pristine"
 
         # 1. BRAIN SETUP: Initialize the New 2026 GenAI Client
         api_key = os.environ.get("GEMINI_API_KEY")
-        if not api_key: return "Intelligence Hub Error: API key missing."
+        if not api_key: 
+            return "GREETING| Sir, the Intelligence Hub is reporting a neural key drift.\nITEM| ERROR | Gemini API Key Missing\nITEM| STATUS | Summary Inactive"
         client = genai.Client(api_key=api_key)
 
         prompt = f"""
@@ -109,7 +122,7 @@ def get_jarvis_email_briefing() -> str:
                 target_model = models[0].name
             
             if not target_model:
-                return "Sir, I've scanned the mail but no authorized intelligence models were found."
+                return "GREETING| Sir, I've scanned the mail but no authorized intelligence models were found.\nITEM| CORE | Model Discovery Failed\nITEM| STATUS | Waiting for Neural Link"
 
             # Generate the Briefing
             response = client.models.generate_content(

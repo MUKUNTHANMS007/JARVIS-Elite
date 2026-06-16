@@ -23,8 +23,8 @@ load_dotenv(os.path.join(_REPO_ROOT, ".env"), override=False)
 load_dotenv(os.path.join(_BACKEND_DIR, ".env"), override=False)
 
 # Internal Imports
-from voice.stt import transcribe_audio
-from voice.tts import synthesize_speech_stream, synthesize_speech, close_tts_client
+from voice.stt import transcribe_audio, warm_up_stt
+from voice.tts import synthesize_speech_stream, synthesize_speech, close_tts_client, warm_up_tts
 from agent.core import get_agent_response_stream
 from routers.briefing import router as briefing_router
 from routers.work import router as work_router
@@ -63,7 +63,8 @@ async def refresh_intelligence_hub():
             try:
                 count = await asyncio.wait_for(asyncio.to_thread(get_unread_count_raw), timeout=15)
                 update_intelligence("gmail_unread", count)
-            except Exception: pass
+            except Exception as e:
+                logger.debug(f"[Neural Hub] Gmail sync drift: {e}")
             await asyncio.sleep(30)
 
     async def sync_gmail_briefing():
@@ -76,8 +77,8 @@ async def refresh_intelligence_hub():
                 briefing = await asyncio.wait_for(asyncio.to_thread(get_gmail_briefing), timeout=25)
                 update_intelligence("gmail_briefing", briefing)
                 update_intelligence("intelligence_briefing", briefing)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"[Neural Hub] Gmail briefing drift: {e}")
             await asyncio.sleep(180)
 
     async def sync_leetcode():
@@ -85,7 +86,8 @@ async def refresh_intelligence_hub():
             try:
                 stats = await get_leetcode_stats(user_lc, sync=True)
                 update_intelligence("leetcode", stats)
-            except Exception: pass
+            except Exception as e:
+                logger.debug(f"[Neural Hub] LeetCode sync drift: {e}")
             await asyncio.sleep(300)
 
     async def sync_github():
@@ -93,7 +95,8 @@ async def refresh_intelligence_hub():
             try:
                 pulse = await asyncio.wait_for(asyncio.to_thread(get_github_pulse), timeout=15)
                 update_intelligence("github", pulse)
-            except Exception: pass
+            except Exception as e:
+                logger.debug(f"[Neural Hub] GitHub pulse drift: {e}")
             await asyncio.sleep(300)
 
     async def sync_calendar_sentinel():
@@ -113,7 +116,7 @@ async def refresh_intelligence_hub():
                 for event in upcoming[:3]:
                     try: 
                         day_str = str(datetime.strptime(event.get("event_date", ""), "%Y-%m-%d").day)
-                    except: day_str = "??"
+                    except (ValueError, TypeError): day_str = "??"
                     academic_radar.append({
                         "title": event.get("title", "Scheduled Event"),
                         "date": day_str,
@@ -138,7 +141,8 @@ async def refresh_intelligence_hub():
                                         "type": "MEETING_ALERT", "title": event.get("title"), "diff": round(diff), "timestamp": now
                                     }
                                     update_intelligence("proactive_triggers", current_triggers)
-            except Exception: pass
+            except Exception as e:
+                logger.debug(f"[Neural Hub] Calendar sync drift: {e}")
             await asyncio.sleep(60)
 
     async def sync_cloud_mirror():
@@ -167,6 +171,19 @@ async def refresh_intelligence_hub():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # STARTUP
+    # --- NEURAL WARMING: Pre-load models to VRAM to kill cold-start lag ---
+    if os.getenv("NEURAL_PREWARM") == "true":
+        logger.info("[Neural Link] Igniting Engines... (VRAM Optimization Active)")
+        try:
+            # Run warming concurrently to save boot time
+            await asyncio.gather(
+                asyncio.to_thread(warm_up_stt),
+                asyncio.to_thread(warm_up_tts)
+            )
+            logger.info("[Neural Link] RTX 3050 Ti Loaded & Ready.")
+        except Exception as e:
+            logger.error(f"[Neural Link] Handshake Drift during warming: {e}")
+
     # --- NON-BLOCKING BOOT: Prevent Supabase/Net hangs from blocking port 8000 ---
     asyncio.create_task(init_db())
     hub_task = asyncio.create_task(refresh_intelligence_hub())
@@ -178,7 +195,7 @@ async def lifespan(app: FastAPI):
     logger.info("[Neural Core] Shutting down.")
 
 app = FastAPI(title="JARVIS Neural Core", lifespan=lifespan)
-app.add_middleware(GZipMiddleware, minimum_size=1000)
+# app.add_middleware(GZipMiddleware, minimum_size=1000) # Disabled for binary WS stability
 
 # --- NEURAL FIREWALL: Trusted Host Filtering (Broadened for Loopback Stability) ---
 app.add_middleware(
@@ -199,16 +216,9 @@ async def neural_security_headers(request: Request, call_next):
 # --- NEURAL GATEWAY: Restricted CORS ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000", 
-        "http://localhost:5173", 
-        "http://127.0.0.1:3000", 
-        "http://localhost:3001", 
-        "http://127.0.0.1:3001"
-    ],
-    allow_origin_regex=r"https://.*\.trycloudflare\.com",
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 

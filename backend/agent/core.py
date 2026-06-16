@@ -385,6 +385,7 @@ async def get_agent_response_stream(user_text: str, user_id: str = "JARVIS_ADMIN
 
         except Exception as e:
             err_msg = f"[Neural Core] Handshake Collision: {str(e)}"
+            print(f"DEBUG EXCEPTION: {err_msg}")
             logger.error(err_msg)
             if loop_count == 1 and "vision" in model_to_use:
                 # Silent atomic retry by dropping optics if vision fails
@@ -395,6 +396,18 @@ async def get_agent_response_stream(user_text: str, user_id: str = "JARVIS_ADMIN
             if "validation failed" in str(e).lower() or "not match schema" in str(e).lower():
                 yield f"Sir, I encountered a Neural Alignment Drift: {str(e)}. Attempting to recalibrate..."
             break
+
+        # Parse text-based function tags if native tool calls were not populated
+        import uuid
+        text_tags = re.findall(r'<function=(\w+)>(.*?)</function>', assistant_content, flags=re.DOTALL)
+        for fn_name, fn_args in text_tags:
+            if not any(tc["name"] == fn_name for tc in tool_calls_data):
+                call_id = f"call_{uuid.uuid4().hex[:12]}"
+                tool_calls_data.append({
+                    "id": call_id,
+                    "name": fn_name,
+                    "args": fn_args.strip() or "{}"
+                })
 
         if not tool_calls_data: break
 

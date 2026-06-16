@@ -28,14 +28,15 @@ export function StatusPage({ systemStatus, timerEvent }: StatusPageProps) {
   useEffect(() => {
     const fetchWorkData = async () => {
       try {
-        const [ghRes, leetcodeRes] = await Promise.all([
+        const [ghRes, statsRes] = await Promise.all([
           fetch(`${HUB_URL}/api/work/github`),
-          fetch(`${HUB_URL}/api/inbox/count`) 
+          fetch(`${HUB_URL}/api/routine/stats`)
         ]);
         
-        const [ghData, inboxData] = await Promise.all([ghRes.json(), leetcodeRes.json()]);
+        const [ghData, statsData] = await Promise.all([ghRes.json(), statsRes.json()]);
         setGithubActivity(ghData);
-        setLeetcodeStats(inboxData.breakdown.leetcode);
+        setLeetcodeStats({ streak: statsData.leetcode_streak, gmail: statsData.gmail_count });
+        setWorkStats(statsData); // Some stats like uptime might be here
       } catch (err) {
         console.error("Failed to fetch work data:", err);
       } finally {

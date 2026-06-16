@@ -26,35 +26,29 @@ interface UseJarvisSocketReturn {
 
 export function useAudioSocket(url: string): UseJarvisSocketReturn {
   const ws = useRef<WebSocket | null>(null);
-  const mediaRecorder = useRef<MediaRecorder | null>(null);
   const retryCount = useRef(0);
   const retryTimer = useRef<number | undefined>(undefined);
   const pingTimer = useRef<number | undefined>(undefined);
   const currentAssistantMsg = useRef<string>("");
+  const shouldReconnect = useRef(true);
 
   const [messages, setMessages] = useState<JarvisMessage[]>([]);
   const [isConnected, setIsConnected] = useState(false);
-  const [isRecording, setIsRecording] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
-  const { playRawChunk, initAudio, isSpeaking: isWorkletSpeaking } = useJarvisAudio();
-  const [isSpeaking, setIsSpeaking] = useState(false);
   const [mood, setMood] = useState("normal");
 
-  // Sync isSpeaking with the high-priority thread state
-  useEffect(() => {
-    setIsSpeaking(isWorkletSpeaking);
-  }, [isWorkletSpeaking]);
+  const { isSpeaking, playRawChunk, initAudio } = useJarvisAudio();
 
   const MAX_RETRIES = 8;
 
   const connect = useCallback(() => {
-    if (ws.current?.readyState === WebSocket.OPEN) return;
+    if (ws.current?.readyState === WebSocket.OPEN || ws.current?.readyState === WebSocket.CONNECTING) return;
 
     const socket = new WebSocket(url);
-    socket.binaryType = "arraybuffer";
+    socket.binaryType = 'arraybuffer';
     ws.current = socket;
 
-    socket.onopen = () => {
+    socket.onopen = async () => {
       setIsConnected(true);
       retryCount.current = 0;
       console.log("[Jarvis] Neural link established.");
@@ -65,66 +59,63 @@ export function useAudioSocket(url: string): UseJarvisSocketReturn {
           socket.send(JSON.stringify({ type: "PONG" }));
         }
       }, 25000);
-
-      // Warm up the AudioWorklet thread
-      initAudio();
     };
 
-    socket.onmessage = (event) => {
-      if (event.data instanceof ArrayBuffer) {
-        // High-priority audio stream offloaded to Worklet thread
-        playRawChunk(event.data);
-        return;
-      }
+    socket.onmessage = async (event) => {
+      if (typeof event.data === 'string') {
+        const msg = JSON.parse(event.data);
 
-      const msg = JSON.parse(event.data as string);
+        switch (msg.type as MessageType) {
+          case "PING":
+            socket.send(JSON.stringify({ type: "PONG" }));
+            break;
 
-      switch (msg.type as MessageType) {
-        case "PING":
-          socket.send(JSON.stringify({ type: "PONG" }));
-          break;
-
-        case "TRANSCRIPTION":
-          setMessages(prev => [...prev, {
-            role: "user",
-            content: msg.text,
-            timestamp: Date.now()
-          }]);
-          break;
-
-        case "TURN_START":
-          setIsThinking(true);
-          if (msg.mood) setMood(msg.mood);
-          currentAssistantMsg.current = "";
-          break;
-
-        case "TEXT_CHUNK":
-          currentAssistantMsg.current += msg.text;
-          setMessages(prev => {
-            const last = prev[prev.length - 1];
-            if (last?.role === "assistant") {
-              return [...prev.slice(0, -1), {
-                ...last,
-                content: currentAssistantMsg.current
-              }];
-            }
-            return [...prev, {
-              role: "assistant",
-              content: currentAssistantMsg.current,
+          case "TRANSCRIPTION":
+            setMessages(prev => [...prev, {
+              role: "user",
+              content: msg.text,
               timestamp: Date.now()
-            }];
-          });
-          break;
+            }]);
+            break;
 
-        case "TURN_COMPLETE":
-          setIsThinking(false);
-          currentAssistantMsg.current = "";
-          break;
+          case "TURN_START":
+            setIsThinking(true);
+            if (msg.mood) setMood(msg.mood);
+            currentAssistantMsg.current = "";
+            break;
 
-        case "ERROR":
-          console.error("[Jarvis] Agent error:", msg.message);
-          setIsThinking(false);
-          break;
+          case "TEXT_CHUNK":
+            currentAssistantMsg.current += msg.text;
+            setMessages(prev => {
+              const last = prev[prev.length - 1];
+              if (last?.role === "assistant") {
+                return [...prev.slice(0, -1), {
+                  ...last,
+                  content: currentAssistantMsg.current
+                }];
+              }
+              return [...prev, {
+                role: "assistant",
+                content: currentAssistantMsg.current,
+                timestamp: Date.now()
+              }];
+            });
+            break;
+
+          case "TURN_COMPLETE":
+            setIsThinking(false);
+            currentAssistantMsg.current = "";
+            break;
+
+          case "ERROR":
+            console.error("[Jarvis] Agent error:", msg.message);
+            setIsThinking(false);
+            break;
+        }
+      } else {
+        if (event.data instanceof ArrayBuffer) {
+          await playRawChunk(event.data);
+        }
       }
     };
 
@@ -133,7 +124,7 @@ export function useAudioSocket(url: string): UseJarvisSocketReturn {
       clearInterval(pingTimer.current);
       console.warn(`[Jarvis] Disconnected. Code: ${e.code}`);
 
-      if (e.code !== 1000 && retryCount.current < MAX_RETRIES) {
+      if (shouldReconnect.current && retryCount.current < MAX_RETRIES) {
         const delay = Math.min(1000 * 2 ** retryCount.current, 30000);
         retryCount.current++;
         console.log(`[Jarvis] Reconnecting in ${delay}ms (attempt ${retryCount.current})`);
@@ -142,41 +133,21 @@ export function useAudioSocket(url: string): UseJarvisSocketReturn {
     };
 
     socket.onerror = () => socket.close();
-  }, [url, initAudio, playRawChunk]);
+  }, [url, playRawChunk]);
 
   const startRecording = useCallback(async (imageFrame: string | null = null) => {
-    if (!ws.current || ws.current.readyState !== WebSocket.OPEN) return;
-
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
-    mediaRecorder.current = recorder;
-
-    ws.current.send(JSON.stringify({ type: "AUDIO_START", image: imageFrame }));
-    setIsRecording(true);
-
-    recorder.ondataavailable = (e) => {
-      if (e.data.size > 0 && ws.current?.readyState === WebSocket.OPEN) {
-        ws.current.send(e.data);
-      }
-    };
-
-    recorder.start(100); // 100ms chunks for low latency
+    // Voice control disabled
   }, []);
 
   const stopRecording = useCallback(() => {
-    mediaRecorder.current?.stop();
-    mediaRecorder.current?.stream.getTracks().forEach(t => t.stop());
-    setIsRecording(false);
-
-    if (ws.current?.readyState === WebSocket.OPEN) {
-      ws.current.send(JSON.stringify({ type: "stop_recording" }));
-    }
+    // Voice control disabled
   }, []);
 
-  const sendTextMessage = useCallback((text: string, image: string | null = null) => {
+  const sendTextMessage = useCallback(async (text: string, image: string | null = null) => {
+    await initAudio();
     if (!ws.current || ws.current.readyState !== WebSocket.OPEN) return;
     ws.current.send(JSON.stringify({ type: "text_input", text, image }));
-  }, []);
+  }, [initAudio]);
 
   const reconnect = useCallback(() => {
     clearTimeout(retryTimer.current);
@@ -188,8 +159,10 @@ export function useAudioSocket(url: string): UseJarvisSocketReturn {
   const clearMessages = useCallback(() => setMessages([]), []);
 
   useEffect(() => {
+    shouldReconnect.current = true;
     connect();
     return () => {
+      shouldReconnect.current = false;
       clearTimeout(retryTimer.current);
       clearInterval(pingTimer.current);
       ws.current?.close(1000);
@@ -199,7 +172,7 @@ export function useAudioSocket(url: string): UseJarvisSocketReturn {
   return {
     messages,
     isConnected,
-    isRecording,
+    isRecording: false,
     isThinking,
     isSpeaking,
     mood,

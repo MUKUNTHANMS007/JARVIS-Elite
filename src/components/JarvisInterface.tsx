@@ -122,6 +122,7 @@ export function JarvisInterface({
         setStats(normalized);
       }
       if (syncData.system) setSystemStatus(syncData.system);
+      if (syncData.focus) setFocusData(syncData.focus);
     } catch (e) {
       console.warn("[Neural Hub] Initial sync pulse failed. Falling back to WebSocket stream.");
     }
@@ -133,6 +134,7 @@ export function JarvisInterface({
 
   useEffect(() => {
     if (data) {
+      if (data.focus) setFocusData(data.focus);
       // Production Grade Packet Mapping
       if (data.dashboard) {
         setStats((prev: any) => {

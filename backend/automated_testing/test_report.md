@@ -1,33 +1,53 @@
-# JARVIS System Diagnostic & Reliability Report
-
-Generated: 2026-04-04 10:48:30 (Neural Sync Active)
+# JARVIS Automated Test Report
+Generated: 2026-06-12 21:04:35
 ------------------------------------------------------------
+## Summary
+- **Tests Run**: 5
+- **Failures**: 2
+- **Errors**: 2
+- **Status**: FAILED
 
-## 📊 Summary
-- **Tests Run**: 14 (Neural Link, Parallel Dash, DB Intelligence, MCP)
-- **Status**: ✅ PASSED (100% Reliability)
-- **Latency Proof**: Parallel Dash Duration: **0.4002s** (Sequential would have been 0.50s+)
+## Details
+### Failures
+- **test_gmail_smart_notifications (test_tools_logic.TestJarvisTools.test_gmail_smart_notifications)**: Traceback (most recent call last):
+  File "C:\Users\Mukunthan\AppData\Local\Programs\Python\Python312\Lib\unittest\mock.py", line 1387, in patched
+    return func(*newargs, **newkeywargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "d:\JARVIS\backend\automated_testing\test_tools_logic.py", line 27, in test_gmail_smart_notifications
+    self.assertIn("Mukunthan, I've scanned your latest 1 unread messages:", result)
+AssertionError: "Mukunthan, I've scanned your latest 1 unread messages:" not found in "GREETING| I've scanned your primary communication layer, Sir.\nITEM| STATUS | No Urgent Updates Found\nITEM| INBOX | Primary Tab Pristine"
 
-## ⚡ Performance Benchmarking (Parallelism)
-We used `time.perf_counter()` and a `pytest` suite to mathematically verify that the JARVIS dashboard is no longer a sequential bottleneck.
+- **test_spotify_search_track (test_tools_logic.TestJarvisTools.test_spotify_search_track)**: Traceback (most recent call last):
+  File "C:\Users\Mukunthan\AppData\Local\Programs\Python\Python312\Lib\unittest\mock.py", line 1387, in patched
+    return func(*newargs, **newkeywargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "d:\JARVIS\backend\automated_testing\test_tools_logic.py", line 42, in test_spotify_search_track
+    self.assertIn("by Search Artist", result)
+AssertionError: 'by Search Artist' not found in 'Playing track: Mock Search Results on your PC, Sir.'
 
-| Service | Mock Delay | Status |
-| :--- | :--- | :--- |
-| **Gmail Sync** | 0.1s | Parallelized |
-| **Spotify Track** | 0.4s | Parallelized |
-| **LeetCode Activity** | 0.05s | Concurrent |
-| **Total Response** | **~0.4s** | ✅ SUCCESS |
+### Errors
+- **test_agent_routing (unittest.loader._FailedTest.test_agent_routing)**: ImportError: Failed to import test module: test_agent_routing
+Traceback (most recent call last):
+  File "C:\Users\Mukunthan\AppData\Local\Programs\Python\Python312\Lib\unittest\loader.py", line 394, in _find_test_path
+    module = self._get_module_from_name(name)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Mukunthan\AppData\Local\Programs\Python\Python312\Lib\unittest\loader.py", line 337, in _get_module_from_name
+    __import__(name)
+  File "d:\JARVIS\backend\automated_testing\test_agent_routing.py", line 8, in <module>
+    from agent.core import get_tool_subset, GROQ_TOOLS
+ImportError: cannot import name 'get_tool_subset' from 'agent.core' (D:\JARVIS\backend\agent\core.py)
 
-## 🛡️ Resilience & Mitigation Strategies
-This project follows a "Fail-Fast but Recover" philosophy to ensure JARVIS is always available.
 
-| Constraint | Mitigation Strategy | Result |
-| :--- | :--- | :--- |
-| **Network Jitter** | Sentence-level chunking starting playback <200ms. | Sub-500ms Audio Start |
-| **Spotify 401/429** | Fallback to "Standby" rather than throwing a 500. | Zero UI Crashes |
-| **LLM Latency** | Parallel WebSocket Observer (Brain & Voice run concurrently). | Constant "Thinking" Visuals |
-| **Database Scalability**| PostgreSQL Rolling Memory Trigger (100 limit). | Constant O(1) Search Query |
+- **test_parallel_system (unittest.loader._FailedTest.test_parallel_system)**: ImportError: Failed to import test module: test_parallel_system
+Traceback (most recent call last):
+  File "C:\Users\Mukunthan\AppData\Local\Programs\Python\Python312\Lib\unittest\loader.py", line 394, in _find_test_path
+    module = self._get_module_from_name(name)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Mukunthan\AppData\Local\Programs\Python\Python312\Lib\unittest\loader.py", line 337, in _get_module_from_name
+    __import__(name)
+  File "d:\JARVIS\backend\automated_testing\test_parallel_system.py", line 5, in <module>
+    from main import dashboard # Import the optimized dashboard logic from main.py
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+ImportError: cannot import name 'dashboard' from 'main' (D:\JARVIS\backend\main.py)
 
----
-## 🏁 System Conclusion
-JARVIS is now a high-performance system designed for "Engineer-Level" placements. The transition from serial to parallel I/O and the move to database-level intelligence has reduced the cognitive load on the user by **over 60%**.
+

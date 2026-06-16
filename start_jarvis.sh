@@ -29,22 +29,31 @@ echo "[Neural Core] Starting FastAPI on port 8000..."
 python -u backend/main.py &
 API_PID=$!
 
-# Launch Neural Worker (Celery)
-echo "[Neural Worker] Starting Celery Worker..."
-cd backend && celery -A celery_app worker --loglevel=info --pool=solo & 
-CELERY_PID=$!
-cd ..
+# Launch Neural Worker (Celery) (Only if Redis is active)
+if nc -z localhost 6379 2>/dev/null; then
+    echo "[Neural Worker] Starting Celery Worker..."
+    cd backend && celery -A celery_app worker --loglevel=info --pool=solo & 
+    CELERY_PID=$!
+    cd ..
+else
+    echo "[Neural Worker] Redis is offline. Celery worker startup bypassed (Eager mode active)."
+    CELERY_PID=""
+fi
 
 # Launch Frontend (P3001)
 echo "[Frontend] Starting Vite server on port 3001..."
 npm run dev &
 FE_PID=$!
 
-echo "[JARVIS] Systems Online. API_PID: $API_PID | CELERY_PID: $CELERY_PID | FE_PID: $FE_PID"
+if [ -n "$CELERY_PID" ]; then
+    echo "[JARVIS] Systems Online. API_PID: $API_PID | CELERY_PID: $CELERY_PID | FE_PID: $FE_PID"
+else
+    echo "[JARVIS] Systems Online. API_PID: $API_PID | FE_PID: $FE_PID (Celery: Bypass)"
+fi
 echo "[JARVIS] Neural Pulse active. Press Ctrl+C to terminate all processes."
 
 # Trap exit signals to ensure clean shutdown
-trap "echo '[JARVIS] Powering down...'; kill $API_PID $CELERY_PID $FE_PID 2>/dev/null || true; exit" SIGINT SIGTERM
+trap "echo '[JARVIS] Powering down...'; kill \$API_PID \$FE_PID \$CELERY_PID 2>/dev/null || true; exit" SIGINT SIGTERM
 
 # Stay active while servers run
 wait

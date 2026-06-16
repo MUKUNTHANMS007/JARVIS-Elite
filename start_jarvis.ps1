@@ -27,21 +27,42 @@ Stop-Process -Name "celery" -Force -ErrorAction SilentlyContinue
 Write-Host "[Neural Core] Starting FastAPI on port 8000..."
 $API_PROC = Start-Process -FilePath ".\backend\.venv\Scripts\python.exe" -ArgumentList "-u", "main.py" -WorkingDirectory ".\backend" -WindowStyle Normal -PassThru
 
-# Start Celery Worker
-Write-Host "[Neural Worker] Starting Celery Worker..."
-$CELERY_PROC = Start-Process -FilePath ".\backend\.venv\Scripts\celery.exe" -ArgumentList "-A", "celery_app", "worker", "--loglevel=info", "--pool=solo" -WorkingDirectory ".\backend" -WindowStyle Normal -PassThru
+# Check Redis Connectivity
+$redis_active = $false
+try {
+    $socket = New-Object System.Net.Sockets.TcpClient("localhost", 6379)
+    if ($socket.Connected) {
+        $redis_active = $true
+        $socket.Close()
+    }
+} catch {}
+
+# Start Celery Worker (Only if Redis is active)
+$CELERY_PROC = $null
+if ($redis_active) {
+    Write-Host "[Neural Worker] Starting Celery Worker..."
+    $CELERY_PROC = Start-Process -FilePath ".\backend\.venv\Scripts\celery.exe" -ArgumentList "-A", "celery_app", "worker", "--loglevel=info", "--pool=solo" -WorkingDirectory ".\backend" -WindowStyle Normal -PassThru
+} else {
+    Write-Host "[Neural Worker] Redis is offline. Celery worker startup bypassed (Eager mode active)."
+}
 
 # Start Frontend (P3001)
 Write-Host "[Frontend] Starting Vite server on port 3001..."
 $FE_PROC = Start-Process -FilePath "npm.cmd" -ArgumentList "run", "dev" -WorkingDirectory ".\" -WindowStyle Normal -PassThru
 
 Write-Host "[JARVIS] Systems Online."
-Write-Host "API_PID: $($API_PROC.Id) | CELERY_PID: $($CELERY_PROC.Id) | FE_PID: $($FE_PROC.Id)"
+$status_pids = @($API_PROC.Id, $FE_PROC.Id)
+if ($redis_active) {
+    $status_pids += $CELERY_PROC.Id
+    Write-Host "API_PID: $($API_PROC.Id) | CELERY_PID: $($CELERY_PROC.Id) | FE_PID: $($FE_PROC.Id)"
+} else {
+    Write-Host "API_PID: $($API_PROC.Id) | FE_PID: $($FE_PROC.Id) (Celery: Bypass)"
+}
 Write-Host "[JARVIS] Neural Pulse active. Keep this window open."
 
 # Wait for exit
-Wait-Process -Id $API_PROC.Id, $CELERY_PROC.Id, $FE_PROC.Id -ErrorAction SilentlyContinue
+Wait-Process -Id $status_pids -ErrorAction SilentlyContinue
 
 Write-Host "[JARVIS] Powering down... Clearing processes."
-Stop-Process -Id $API_PROC.Id, $CELERY_PROC.Id, $FE_PROC.Id -Force -ErrorAction SilentlyContinue
+Stop-Process -Id $status_pids -Force -ErrorAction SilentlyContinue
 

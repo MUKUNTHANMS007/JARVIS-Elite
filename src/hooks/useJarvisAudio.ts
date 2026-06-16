@@ -10,9 +10,20 @@ export function useJarvisAudio(): UseJarvisAudioReturn {
   const audioCtx = useRef<AudioContext | null>(null);
   const workletNode = useRef<AudioWorkletNode | null>(null);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const textDecoder = useRef(new TextDecoder());
 
   const initAudio = useCallback(async () => {
-    if (audioCtx.current) return;
+    if (audioCtx.current) {
+      if (audioCtx.current.state === "suspended") {
+        try {
+          await audioCtx.current.resume();
+          console.log("[Neural Audio] Resumed suspended AudioContext on user interaction.");
+        } catch (e) {
+          console.error("[Neural Audio] Failed to resume AudioContext:", e);
+        }
+      }
+      return;
+    }
 
     try {
       // 24kHz is the native sample rate of Kokoro-82M
@@ -35,6 +46,11 @@ export function useJarvisAudio(): UseJarvisAudioReturn {
       audioCtx.current = ctx;
       workletNode.current = node;
       console.log("[Neural Audio] Worklet thread initialized successfully.");
+      
+      if (ctx.state === "suspended") {
+        await ctx.resume();
+        console.log("[Neural Audio] Resumed immediately after init.");
+      }
     } catch (err) {
       console.error("[Neural Audio] Worklet failed to initialize:", err);
     }
@@ -55,11 +71,12 @@ export function useJarvisAudio(): UseJarvisAudioReturn {
     }
 
     // Check if it's a legacy WAV (rare now, but robust)
-    const isWav = new TextDecoder().decode(arrayBuffer.slice(0, 4)) === "RIFF";
+    const header = new Uint8Array(arrayBuffer, 0, 4);
+    const isWav = header[0] === 82 && header[1] === 73 && header[2] === 70 && header[3] === 70; // "RIFF"
 
     if (isWav) {
         // Fallback for WAV: manual decoding (blocks main thread slightly)
-        const decoded = await ctx.decodeAudioData(arrayBuffer.slice(0));
+        const decoded = await ctx.decodeAudioData(arrayBuffer);
         const float32 = decoded.getChannelData(0);
         workletNode.current.port.postMessage(float32);
     } else {

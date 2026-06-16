@@ -18,7 +18,8 @@ async def safe_fetch(func, *args, default=None, **kwargs):
             return await func(*args, **kwargs)
         return await asyncio.to_thread(func, *args, **kwargs)
     except Exception as e:
-        print(f"[Jarvis Core] Task {func.__name__} failed: {e}")
+        func_name = getattr(func, '__name__', str(func))
+        print(f"[Jarvis Core] Task {func_name} failed: {e}")
         return default
 
 @router.get("/stats")

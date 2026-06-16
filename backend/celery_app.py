@@ -41,7 +41,11 @@ def check_redis_connectivity():
 
 # Self-Diagnostic on Import
 if not check_redis_connectivity():
-    print(f"[Neural Warning] Redis unreachable at {CELERY_BROKER}. Falling back to Direct Path.")
+    print(f"[Neural Warning] Redis unreachable at {CELERY_BROKER}. Falling back to Direct Path (Eager Mode).")
+    celery_app.conf.update(
+        task_always_eager=True,
+        task_eager_propagates=True
+    )
 
 if __name__ == "__main__":
     celery_app.start()

@@ -20,3 +20,7 @@ env/
 venv/
 *.pdb
 *.swp
+
+# Gmail OAuth credentials and tokens
+backend/token.json
+backend/credentials.json

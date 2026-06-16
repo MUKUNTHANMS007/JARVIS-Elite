@@ -1,101 +1,34 @@
 {
-  "gmail_unread": 0,
-  "gmail_briefing": "Neural Error: ('invalid_grant: Token has been expired or revoked.', {'error': 'invalid_grant', 'error_description': 'Token has been expired or revoked.'})",
+  "gmail_unread": 38,
+  "gmail_briefing": "GREETING| Sir, your inbox contains a mix of critical account verifications and career development opportunities requiring your attention.\nITEM| SECURITY| Verify your GitLab account identity immediately using the code 476783 and review recent GitHub OAuth authorizations.\nITEM| CAREER| Evaluate the Senior Full Stack Developer role at Partha Dental and your pending ProPeers DSA learning modules.\nITEM| FINANCE| Note the upcoming Spotify subscription price adjustment to 139 INR effective July 5, 2026.\nITEM| GENERAL| Clear your pending Snapchat notifications and disregard the promotional noise regarding Spotify and career trackers.",
   "leetcode": {
-    "total_solved": 250,
-    "easy": 138,
+    "total_solved": 251,
+    "easy": 139,
     "medium": 102,
     "hard": 10,
     "streak": 0,
-    "message": "Sir, solved: 250. Recommend we focus on: Heap, Sliding Window, Graph. Your streak has reset in the War-Room. Regain momentum immediately."
+    "message": "Sir, solved: 251. Recommend we focus on: Heap, Sliding Window, Graph. Your streak has reset in the War-Room. Regain momentum immediately."
   },
   "github": [
     {
-      "name": "System-Design-VAC",
+      "name": "APTITUDE_PREP",
       "stars": 0,
       "issues": 0,
-      "last_commit": "feat:workflow init",
-      "sha": "2491049"
-    },
-    {
-      "name": "TUF_SWE_Calendar",
-      "stars": 0,
-      "issues": 0,
-      "last_commit": "docs: add project overview video to..",
-      "sha": "15bd101"
+      "last_commit": "Create guide for Problems on Ages i..",
+      "sha": "248cc0f"
     }
   ],
-  "calendar": [
-    {
-      "id": "fb421e10-a8fd-4713-b314-8d5003ec9e5a",
-      "user_id": "JARVIS_ADMIN",
-      "title": "ESIOT Model Lab",
-      "description": null,
-      "event_date": "2024-04-07",
-      "event_time": "15:00:00",
-      "category": "Task",
-      "created_at": "2026-04-06T05:27:47.27995+00:00"
-    },
-    {
-      "id": "1b21de6f-8ca0-4732-b5a3-a4723b68b384",
-      "user_id": "JARVIS_ADMIN",
-      "title": "ESIOT Model Lab",
-      "description": null,
-      "event_date": "2024-04-07",
-      "event_time": "15:05:00",
-      "category": "Task",
-      "created_at": "2026-04-06T10:39:34.81551+00:00"
-    },
-    {
-      "id": "3934b77e-715e-4fd5-bc8f-9078c3ca3ffd",
-      "user_id": "JARVIS_ADMIN",
-      "title": "ESIOT Model Lab",
-      "description": null,
-      "event_date": "2024-04-07",
-      "event_time": "15:00:00",
-      "category": "Meeting",
-      "created_at": "2026-04-06T10:40:31.691282+00:00"
-    },
-    {
-      "id": "d12e2702-05ca-4dbf-86ab-423d0eac3cc1",
-      "user_id": "JARVIS_ADMIN",
-      "title": "ESIOT Model Lab",
-      "description": null,
-      "event_date": "2024-04-08",
-      "event_time": "15:05:00",
-      "category": "Meeting",
-      "created_at": "2026-04-06T10:40:33.393872+00:00"
-    },
-    {
-      "id": "49265db9-6451-4021-851d-58327beba3ba",
-      "user_id": "JARVIS_ADMIN",
-      "title": "Meeting with Goldman Sachs",
-      "description": "Discuss potential partnership opportunities.",
-      "event_date": "2024-04-10",
-      "event_time": "09:00:00",
-      "category": "Meeting",
-      "created_at": "2026-04-06T17:05:33.694538+00:00"
-    },
-    {
-      "id": "8d536ad9-3279-483d-b687-26735f36c5ce",
-      "user_id": "JARVIS_ADMIN",
-      "title": "Text and Speech Model Lab",
-      "description": null,
-      "event_date": "2026-04-13",
-      "event_time": "13:10:00",
-      "category": "Task",
-      "created_at": "2026-04-05T03:24:35.95208+00:00"
-    }
-  ],
-  "last_synced": 1775837976.3850775,
+  "calendar": [],
+  "last_synced": 1781594603.690192,
   "status": "online",
   "agent_state": "IDLE",
   "mood_score": 0.0,
   "active_reminders": [],
   "spotify_track": "Inactive",
-  "intelligence_briefing": "Neural Error: ('invalid_grant: Token has been expired or revoked.', {'error': 'invalid_grant', 'error_description': 'Token has been expired or revoked.'})",
+  "intelligence_briefing": "GREETING| Sir, your inbox contains a mix of critical account verifications and career development opportunities requiring your attention.\nITEM| SECURITY| Verify your GitLab account identity immediately using the code 476783 and review recent GitHub OAuth authorizations.\nITEM| CAREER| Evaluate the Senior Full Stack Developer role at Partha Dental and your pending ProPeers DSA learning modules.\nITEM| FINANCE| Note the upcoming Spotify subscription price adjustment to 139 INR effective July 5, 2026.\nITEM| GENERAL| Clear your pending Snapchat notifications and disregard the promotional noise regarding Spotify and career trackers.",
   "active_tool": null,
   "spotify_image": null,
   "academic_radar": [],
-  "batman_mode_JARVIS_ADMIN": false
+  "batman_mode_JARVIS_ADMIN": false,
+  "batman_mode": false
 }
