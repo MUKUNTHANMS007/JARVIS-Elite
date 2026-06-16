@@ -30,7 +30,22 @@ export function useAudioSocket(url: string): UseJarvisSocketReturn {
   const retryTimer = useRef<number | undefined>(undefined);
   const pingTimer = useRef<number | undefined>(undefined);
   const currentAssistantMsg = useRef<string>("");
+  const audioReceivedThisTurn = useRef(false);
   const shouldReconnect = useRef(true);
+
+  const speakWithBrowserTTS = useCallback((text: string) => {
+    if (!text.trim() || !("speechSynthesis" in window)) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 1.0;
+    utterance.pitch = 0.95;
+    const voices = window.speechSynthesis.getVoices();
+    const preferred = voices.find(v =>
+      v.lang.startsWith("en-GB") || v.name.toLowerCase().includes("ryan") || v.name.toLowerCase().includes("daniel")
+    ) ?? voices.find(v => v.lang.startsWith("en"));
+    if (preferred) utterance.voice = preferred;
+    window.speechSynthesis.speak(utterance);
+  }, []);
 
   const [messages, setMessages] = useState<JarvisMessage[]>([]);
   const [isConnected, setIsConnected] = useState(false);
@@ -82,6 +97,7 @@ export function useAudioSocket(url: string): UseJarvisSocketReturn {
             setIsThinking(true);
             if (msg.mood) setMood(msg.mood);
             currentAssistantMsg.current = "";
+            audioReceivedThisTurn.current = false;
             break;
 
           case "TEXT_CHUNK":
@@ -104,6 +120,9 @@ export function useAudioSocket(url: string): UseJarvisSocketReturn {
 
           case "TURN_COMPLETE":
             setIsThinking(false);
+            if (!audioReceivedThisTurn.current && currentAssistantMsg.current.trim()) {
+              speakWithBrowserTTS(currentAssistantMsg.current);
+            }
             currentAssistantMsg.current = "";
             break;
 
@@ -113,7 +132,8 @@ export function useAudioSocket(url: string): UseJarvisSocketReturn {
             break;
         }
       } else {
-        if (event.data instanceof ArrayBuffer) {
+        if (event.data instanceof ArrayBuffer && event.data.byteLength > 0) {
+          audioReceivedThisTurn.current = true;
           await playRawChunk(event.data);
         }
       }
@@ -133,7 +153,7 @@ export function useAudioSocket(url: string): UseJarvisSocketReturn {
     };
 
     socket.onerror = () => socket.close();
-  }, [url, playRawChunk]);
+  }, [url, playRawChunk, speakWithBrowserTTS]);
 
   const startRecording = useCallback(async (imageFrame: string | null = null) => {
     // Voice control disabled

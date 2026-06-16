@@ -56,7 +56,12 @@ export function useJarvisAudio(): UseJarvisAudioReturn {
     }
   }, []);
 
+  const postToWorklet = useCallback((float32: Float32Array) => {
+    workletNode.current?.port.postMessage(float32);
+  }, []);
+
   const playRawChunk = useCallback(async (arrayBuffer: ArrayBuffer) => {
+    if (!arrayBuffer.byteLength) return;
     if (!audioCtx.current) await initAudio();
     
     const ctx = audioCtx.current;
@@ -70,28 +75,34 @@ export function useJarvisAudio(): UseJarvisAudioReturn {
         console.log("[Neural Audio] AudioContext resumed for playback.");
     }
 
-    // Check if it's a legacy WAV (rare now, but robust)
-    const header = new Uint8Array(arrayBuffer, 0, 4);
-    const isWav = header[0] === 82 && header[1] === 73 && header[2] === 70 && header[3] === 70; // "RIFF"
+    const header = new Uint8Array(arrayBuffer, 0, Math.min(4, arrayBuffer.byteLength));
+    const isWav = header[0] === 0x52 && header[1] === 0x49 && header[2] === 0x46 && header[3] === 0x46; // RIFF
+    const isMp3 = header[0] === 0xff && (header[1] === 0xfb || header[1] === 0xf3 || header[1] === 0xfa);
+    const isId3 = header[0] === 0x49 && header[1] === 0x44 && header[2] === 0x33; // ID3 tag
 
-    if (isWav) {
-        // Fallback for WAV: manual decoding (blocks main thread slightly)
-        const decoded = await ctx.decodeAudioData(arrayBuffer);
-        const float32 = decoded.getChannelData(0);
-        workletNode.current.port.postMessage(float32);
-    } else {
-        // PRIMARY PATH: RAW PCM_16 to Float32 conversion
-        const int16Array = new Int16Array(arrayBuffer);
-        const float32Array = new Float32Array(int16Array.length);
-        
-        for (let i = 0; i < int16Array.length; i++) {
-          float32Array[i] = int16Array[i] / 32768.0;
+    if (isWav || isMp3 || isId3) {
+        try {
+            const decoded = await ctx.decodeAudioData(arrayBuffer.slice(0));
+            postToWorklet(decoded.getChannelData(0));
+            return;
+        } catch (e) {
+            console.warn("[Neural Audio] decodeAudioData failed, trying PCM path:", e);
         }
-
-        // Send to AudioWorklet thread
-        workletNode.current.port.postMessage(float32Array);
     }
-  }, [initAudio]);
+
+    // RAW PCM_16 from Groq pipeline (must be even byte length)
+    if (arrayBuffer.byteLength % 2 !== 0) {
+        console.warn("[Neural Audio] Skipping odd-length binary chunk.");
+        return;
+    }
+
+    const int16Array = new Int16Array(arrayBuffer);
+    const float32Array = new Float32Array(int16Array.length);
+    for (let i = 0; i < int16Array.length; i++) {
+      float32Array[i] = int16Array[i] / 32768.0;
+    }
+    postToWorklet(float32Array);
+  }, [initAudio, postToWorklet]);
 
   // Cleanup on unmount
   useEffect(() => {

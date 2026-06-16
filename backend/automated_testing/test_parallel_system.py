@@ -83,3 +83,61 @@ async def test_neural_link_stability():
         pytest.fail(f"WebSocket Worker crashed on disconnect: {e}")
     
     print("\n[Verification] Neural Link: Mid-stream disconnect handled gracefully.")
+
+
+@pytest.mark.asyncio
+async def test_tts_speech_modes():
+    """
+    Verification: TTS Speech Modes.
+    Verifies that the text is chunked and put into the tts_queue correctly
+    under sentence, entire, and chunk modes.
+    """
+    from ws_neural import run_agent, manager
+    
+    mock_ws = MagicMock()
+    mock_ws.client_state.name = "CONNECTED"
+    
+    tokens = ["Hello", ", ", "Sir", ". ", "I", " have", " generated", " a", " briefing", " which", " has", " stats", "."]
+    
+    async def mock_stream(*args, **kwargs):
+        for t in tokens:
+            yield t
+
+    # We patch bridge_tts_worker to just capture what gets put into the queue
+    captured_sentences = []
+    async def mock_worker(client_id, queue):
+        while True:
+            item = await queue.get()
+            if item is None:
+                break
+            captured_sentences.append(item)
+            queue.task_done()
+
+    with patch("ws_neural.get_agent_response_stream", side_effect=mock_stream), \
+         patch("ws_neural.bridge_tts_worker", side_effect=mock_worker), \
+         patch.object(manager, "active", {"test_client_tts": mock_ws}), \
+         patch.object(manager, "send_json", new_callable=AsyncMock):
+        
+        # 1. Test 'sentence' mode (Optimized Default)
+        captured_sentences.clear()
+        with patch("os.getenv", return_value="sentence"):
+            await run_agent("test_client_tts", "hi", None)
+            assert len(captured_sentences) >= 2
+            assert captured_sentences[0] == "Hello, Sir."
+            assert captured_sentences[1] == "I have generated a briefing which has stats."
+
+        # 2. Test 'entire' mode
+        captured_sentences.clear()
+        with patch("os.getenv", return_value="entire"):
+            await run_agent("test_client_tts", "hi", None)
+            assert len(captured_sentences) == 1
+            assert captured_sentences[0] == "Hello, Sir. I have generated a briefing which has stats."
+
+        # 3. Test 'chunk' mode (Legacy fallback)
+        captured_sentences.clear()
+        with patch("os.getenv", return_value="chunk"):
+            await run_agent("test_client_tts", "hi", None)
+            # Stuttery chunk logic splits it up much more frequently
+            assert len(captured_sentences) > 2
+            print(f"\n[Verification] Legacy chunk mode resulted in: {captured_sentences}")
+

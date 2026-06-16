@@ -1,6 +1,7 @@
 import asyncio
 import json
 import uuid
+import os
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from ws_manager import manager
 from agent.core import get_agent_response_stream
@@ -11,6 +12,10 @@ router = APIRouter()
 
 BATMAN_TRIGGER = "gotham needs batman"
 BATMAN_DEACTIVATE = "gotham is safe now"
+
+# TTS speech mode config: sentence (default), entire, or chunk (legacy)
+TTS_SPEECH_MODE = os.getenv("TTS_SPEECH_MODE", "sentence").lower()
+
 
 # --- Tag Stripper Stream ---
 async def strip_function_tags_stream(async_gen):
@@ -58,7 +63,8 @@ async def bridge_tts_worker(client_id: str, queue: asyncio.Queue):
             if sentence is None:
                 break
             async for fragment in synthesize_speech_stream(sentence.strip()):
-                await manager.send_bytes(client_id, fragment)
+                if fragment:
+                    await manager.send_bytes(client_id, fragment)
             queue.task_done()
         except asyncio.CancelledError:
             break
@@ -105,6 +111,9 @@ async def run_agent(
     tts_queue = asyncio.Queue()
     tts_task = asyncio.create_task(bridge_tts_worker(client_id, tts_queue))
 
+    # Support runtime environment overrides for the TTS mode
+    speech_mode = os.getenv("TTS_SPEECH_MODE", TTS_SPEECH_MODE).lower()
+
     sentence_buffer = ""
     token_count = 0
     first_chunk = True
@@ -119,16 +128,42 @@ async def run_agent(
             sentence_buffer += token
             token_count += 1
 
-            # Sentence segmenting for natural TTS flow
-            is_punctuation = any(sentence_buffer.endswith(p) for p in [". ", "? ", "! ", "\n", ", ", "; "])
-            threshold = 6 if first_chunk else 4
-            if is_punctuation or token_count >= threshold:
-                clean = sentence_buffer.strip()
-                if len(clean) > 1:
-                    await tts_queue.put(clean)
-                    first_chunk = False
-                    sentence_buffer = ""
-                    token_count = 0
+            if speech_mode == "entire":
+                # Wait until LLM has finished streaming completely before feeding TTS
+                continue
+
+            elif speech_mode == "chunk":
+                # Legacy 4-6 token micro-chunking logic
+                is_punctuation = any(sentence_buffer.endswith(p) for p in [". ", "? ", "! ", "\n", ", ", "; "])
+                threshold = 6 if first_chunk else 4
+                if is_punctuation or token_count >= threshold:
+                    clean = sentence_buffer.strip()
+                    if len(clean) > 1:
+                        await tts_queue.put(clean)
+                        first_chunk = False
+                        sentence_buffer = ""
+                        token_count = 0
+
+            else:
+                # Optimized 'sentence' mode
+                is_boundary = False
+                # Split at actual sentence terminators followed by a space/newline
+                if any(sentence_buffer.endswith(p) for p in [". ", "? ", "! ", "\n", ".\n", "?\n", "!\n"]):
+                    is_boundary = True
+                # Pause at commas/semicolons only if the chunk has enough length to sound natural
+                elif token_count >= 15 and any(sentence_buffer.endswith(p) for p in [", ", "; ", " - ", "—"]):
+                    is_boundary = True
+                # Run-on fallback to prevent infinite delay on long prose or code lists
+                elif token_count >= 25 and token.isspace():
+                    is_boundary = True
+
+                if is_boundary:
+                    clean = sentence_buffer.strip()
+                    if len(clean) > 1:
+                        await tts_queue.put(clean)
+                        first_chunk = False
+                        sentence_buffer = ""
+                        token_count = 0
 
         if sentence_buffer.strip():
             await tts_queue.put(sentence_buffer.strip())
@@ -152,10 +187,22 @@ async def _send_turn(
     client_id: str,
     reply: str,
 ) -> None:
-    """Send a single-reply turn (used for Batman-mode shortcuts)."""
+    """Send a single-reply turn with TTS (used for Batman-mode shortcuts)."""
     await manager.send_json(client_id, {"type": "TURN_START"})
     await manager.send_json(client_id, {"type": "TEXT_CHUNK", "text": reply})
-    await manager.send_json(client_id, {"type": "TURN_COMPLETE"})
+
+    tts_queue: asyncio.Queue = asyncio.Queue()
+    tts_task = asyncio.create_task(bridge_tts_worker(client_id, tts_queue))
+    await tts_queue.put(reply)
+    await tts_queue.put(None)
+    try:
+        await tts_task
+    except Exception:
+        pass
+
+    ws = manager.active.get(client_id)
+    if ws is not None and ws.client_state.name == "CONNECTED":
+        await manager.send_json(client_id, {"type": "TURN_COMPLETE"})
 
 
 # ---------------------------------------------------------------------------
