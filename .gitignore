@@ -1,26 +1,71 @@
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+backend/token.json
+backend/credentials.json
+
+# Node / frontend artifacts
 node_modules/
 **/node_modules/
-build/
 dist/
+build/
 coverage/
-.DS_Store
-*.log
-.env*
-!.env.example
+.vite/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
 
-# Neural Cache & Python
+# Python / backend artifacts
 __pycache__/
 **/__pycache__/
-*.pyc
+*.py[cod]
+*.pyo
+*.pyd
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
 .venv/
 **/.venv/
 backend/.venv/
 env/
 venv/
-*.pdb
-*.swp
 
-# Gmail OAuth credentials and tokens
-backend/token.json
-backend/credentials.json
+# Runtime logs, caches, and generated state
+.cache
+.cache/
+*.cache
+*.log
+.run-logs/
+backend/logs/
+tmp/
+temp/
+*.tmp
+
+# Local databases and generated data
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
