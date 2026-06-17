@@ -1,7 +1,12 @@
 import pytest
 import asyncio
 import time
+import os
+import sys
 from unittest.mock import patch, MagicMock, AsyncMock
+
+sys.path.append(os.path.join(os.getcwd(), "backend"))
+
 from routers.core import get_core_dashboard_stats as dashboard # Import the optimized dashboard logic from routers.core
 
 # Separate functions to avoid MagicMock serialization across threads

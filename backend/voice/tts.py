@@ -22,6 +22,9 @@ SAMPLE_RATE = 24000
 _client = None
 
 EDGE_TTS_VOICE = os.getenv("EDGE_TTS_VOICE", "en-GB-RyanNeural")
+GROQ_TTS_MODEL = os.getenv("GROQ_TTS_MODEL", "canopylabs/orpheus-v1-english")
+GROQ_TTS_VOICE = os.getenv("GROQ_TTS_VOICE", "troy")
+GROQ_TTS_MAX_RETRIES = int(os.getenv("GROQ_TTS_MAX_RETRIES", "0"))
 
 def _get_groq_client():
     global _client
@@ -29,7 +32,7 @@ def _get_groq_client():
         api_key = os.getenv("GROQ_API_KEY")
         if not api_key:
             return None
-        _client = Groq(api_key=api_key)
+        _client = Groq(api_key=api_key, max_retries=GROQ_TTS_MAX_RETRIES)
     return _client
 
 def _read_groq_speech_response(response) -> bytes | None:
@@ -57,8 +60,8 @@ async def _synthesize_groq(chunk: str) -> bytes | None:
     def _generate():
         try:
             response = client.audio.speech.create(
-                model="canopylabs/orpheus-v1-english",
-                voice="troy",
+                model=GROQ_TTS_MODEL,
+                voice=GROQ_TTS_VOICE,
                 input=chunk,
                 response_format="wav",
             )
@@ -112,6 +115,17 @@ def _wav_to_pcm(wav_bytes: bytes) -> bytes | None:
         return byte_io.getvalue()
     except Exception as e:
         logger.warning("[Neural Link] WAV→PCM conversion failed: %s", e)
+        return None
+
+def _wav_to_float32(wav_bytes: bytes) -> np.ndarray | None:
+    try:
+        audio, sr = sf.read(io.BytesIO(wav_bytes))
+        if audio.ndim > 1:
+            audio = audio[:, 0]
+        audio = resample_audio(audio, sr, SAMPLE_RATE)
+        return np.clip(audio * VOLUME_GAIN, -1.0, 1.0).astype(np.float32)
+    except Exception as e:
+        logger.warning("[Neural Link] WAV→Float32 conversion failed: %s", e)
         return None
 
 def clean_text(text: str) -> str:
@@ -206,20 +220,54 @@ async def synthesize_speech_stream(text: str) -> AsyncGenerator[bytes, None]:
         yield audio_bytes
         await asyncio.sleep(0)
 
+async def synthesize_speech_payload(text: str) -> tuple[bytes, str]:
+    """
+    Generate a single playable audio payload for REST clients.
+    Returns (audio_bytes, media_type).
+    - Groq path returns a WAV assembled from all speech chunks.
+    - edge-tts fallback returns a single MP3 payload for the whole text.
+    """
+    cleaned = clean_text(text)
+    if not cleaned:
+        return b"", "audio/wav"
+
+    chunks = chunk_text(cleaned)
+    groq_available = _get_groq_client() is not None
+    groq_audio_parts: list[np.ndarray] = []
+
+    if groq_available:
+        for chunk in chunks:
+            if not chunk.strip():
+                continue
+            wav_bytes = await _synthesize_groq(chunk)
+            if not wav_bytes:
+                groq_audio_parts = []
+                groq_available = False
+                break
+
+            audio = _wav_to_float32(wav_bytes)
+            if audio is None:
+                groq_audio_parts = []
+                groq_available = False
+                break
+            groq_audio_parts.append(audio)
+
+    if groq_audio_parts:
+        combined = np.concatenate(groq_audio_parts) if len(groq_audio_parts) > 1 else groq_audio_parts[0]
+        byte_io = io.BytesIO()
+        sf.write(byte_io, combined, SAMPLE_RATE, format="WAV")
+        return byte_io.getvalue(), "audio/wav"
+
+    edge_audio = await _synthesize_edge(cleaned)
+    if edge_audio:
+        return edge_audio, "audio/mpeg"
+
+    return b"", "audio/wav"
+
 async def synthesize_speech(text: str) -> bytes:
-    """Legacy support for full blobs (Adds a single WAV Header)."""
-    chunks = []
-    async for chunk in synthesize_speech_stream(text):
-        if chunk:
-            chunks.append(chunk)
-    
-    if not chunks:
-        return b""
-        
-    combined = np.frombuffer(b"".join(chunks), dtype=np.int16)
-    byte_io = io.BytesIO()
-    sf.write(byte_io, combined, SAMPLE_RATE, format='WAV')
-    return byte_io.getvalue()
+    """Legacy compatibility wrapper for clients that only need audio bytes."""
+    audio_bytes, _ = await synthesize_speech_payload(text)
+    return audio_bytes
 
 def warm_up_tts():
     """Neural Pre-warming: Bypassed for high-speed client-side SpeechSynthesis."""

@@ -31,6 +31,10 @@ export function useAudioSocket(url: string): UseJarvisSocketReturn {
   const pingTimer = useRef<number | undefined>(undefined);
   const currentAssistantMsg = useRef<string>("");
   const audioReceivedThisTurn = useRef(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const pendingImageRef = useRef<string | null>(null);
   const shouldReconnect = useRef(true);
 
   const speakWithBrowserTTS = useCallback((text: string) => {
@@ -49,12 +53,30 @@ export function useAudioSocket(url: string): UseJarvisSocketReturn {
 
   const [messages, setMessages] = useState<JarvisMessage[]>([]);
   const [isConnected, setIsConnected] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
   const [mood, setMood] = useState("normal");
 
   const { isSpeaking, playRawChunk, initAudio } = useJarvisAudio();
 
   const MAX_RETRIES = 8;
+
+  const blobToBase64 = useCallback((blob: Blob) => {
+    return new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const result = typeof reader.result === "string" ? reader.result : "";
+        resolve(result.split(",", 2)[1] || "");
+      };
+      reader.onerror = () => reject(reader.error ?? new Error("Failed to encode audio blob."));
+      reader.readAsDataURL(blob);
+    });
+  }, []);
+
+  const stopMediaStream = useCallback(() => {
+    mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+    mediaStreamRef.current = null;
+  }, []);
 
   const connect = useCallback(() => {
     if (ws.current?.readyState === WebSocket.OPEN || ws.current?.readyState === WebSocket.CONNECTING) return;
@@ -156,11 +178,81 @@ export function useAudioSocket(url: string): UseJarvisSocketReturn {
   }, [url, playRawChunk, speakWithBrowserTTS]);
 
   const startRecording = useCallback(async (imageFrame: string | null = null) => {
-    // Voice control disabled
-  }, []);
+    if (isRecording || mediaRecorderRef.current?.state === "recording") return;
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      console.warn("[Jarvis] MediaRecorder is not supported in this browser.");
+      return;
+    }
+
+    try {
+      pendingImageRef.current = imageFrame;
+      await initAudio();
+
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
+
+      const mimeCandidates = [
+        "audio/webm;codecs=opus",
+        "audio/webm",
+        "audio/ogg;codecs=opus",
+        "audio/mp4",
+      ];
+      const supportedMime = mimeCandidates.find((candidate) => MediaRecorder.isTypeSupported(candidate));
+      const recorder = supportedMime ? new MediaRecorder(stream, { mimeType: supportedMime }) : new MediaRecorder(stream);
+
+      audioChunksRef.current = [];
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+      recorder.onerror = (event) => {
+        console.error("[Jarvis] Recording error:", event);
+        setIsRecording(false);
+        stopMediaStream();
+      };
+      recorder.onstop = async () => {
+        try {
+          const chunkType = audioChunksRef.current[0]?.type;
+          const mimeType = recorder.mimeType || chunkType || supportedMime || "audio/webm";
+          const blob = new Blob(audioChunksRef.current, { type: mimeType });
+          const base64Audio = await blobToBase64(blob);
+
+          if (base64Audio && ws.current?.readyState === WebSocket.OPEN) {
+            ws.current.send(JSON.stringify({
+              type: "audio_input",
+              data: base64Audio,
+              mime_type: mimeType,
+              file_name: mimeType.includes("mp4") ? "browser-recording.m4a" : "browser-recording.webm",
+              image: pendingImageRef.current,
+            }));
+          }
+        } catch (error) {
+          console.error("[Jarvis] Failed to send recorded audio:", error);
+        } finally {
+          audioChunksRef.current = [];
+          pendingImageRef.current = null;
+          mediaRecorderRef.current = null;
+          stopMediaStream();
+          setIsRecording(false);
+        }
+      };
+
+      mediaRecorderRef.current = recorder;
+      recorder.start();
+      setIsRecording(true);
+    } catch (error) {
+      console.error("[Jarvis] Failed to start recording:", error);
+      pendingImageRef.current = null;
+      setIsRecording(false);
+      stopMediaStream();
+    }
+  }, [blobToBase64, initAudio, isRecording, stopMediaStream]);
 
   const stopRecording = useCallback(() => {
-    // Voice control disabled
+    const recorder = mediaRecorderRef.current;
+    if (!recorder || recorder.state === "inactive") return;
+    recorder.stop();
   }, []);
 
   const sendTextMessage = useCallback(async (text: string, image: string | null = null) => {
@@ -185,14 +277,18 @@ export function useAudioSocket(url: string): UseJarvisSocketReturn {
       shouldReconnect.current = false;
       clearTimeout(retryTimer.current);
       clearInterval(pingTimer.current);
+      if (mediaRecorderRef.current?.state === "recording") {
+        mediaRecorderRef.current.stop();
+      }
+      stopMediaStream();
       ws.current?.close(1000);
     };
-  }, [connect]);
+  }, [connect, stopMediaStream]);
 
   return {
     messages,
     isConnected,
-    isRecording: false,
+    isRecording,
     isThinking,
     isSpeaking,
     mood,

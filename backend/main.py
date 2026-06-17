@@ -31,6 +31,7 @@ from routers.work import router as work_router
 from routers.calendar import router as calendar_router
 from routers.core import router as core_router
 from routers.evolution import router as evolution_router
+from routers.voice import router as voice_router
 from ws_neural import router as neural_ws_router
 from ws_hub import router as hub_ws_router
 from services.core_service import get_academic_radar, get_today_focus
@@ -254,6 +255,7 @@ app.include_router(work_router, prefix="/api/work")
 app.include_router(calendar_router, prefix="/api/calendar")
 app.include_router(core_router, prefix="/api/routine")
 app.include_router(evolution_router, prefix="/api/evolution")
+app.include_router(voice_router, prefix="/api/voice")
 
 def _system_status_snapshot(hub: dict) -> dict:
     """Builds a compact system status object for initial sync/UI."""

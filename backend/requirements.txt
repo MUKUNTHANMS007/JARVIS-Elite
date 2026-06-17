@@ -14,12 +14,15 @@ python-dotenv
 sqlalchemy
 redis
 google-generativeai
+google-genai
 pyautogui
 mcp
 pytest
+pytest-asyncio
 psutil
 edge-tts
 httpx
+soundfile
 supabase
 psycopg2-binary
 sqlalchemy

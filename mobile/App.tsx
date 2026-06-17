@@ -4,6 +4,7 @@ import {
   Dimensions, Animated, StatusBar, ScrollView 
 } from 'react-native';
 import { Audio } from 'expo-av';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Notifications from 'expo-notifications';
 import { 
   Mic, MicOff, Zap, Code, 
@@ -14,7 +15,9 @@ import {
 const { width } = Dimensions.get('window');
 
 // --- CONFIG ---
-const BACKEND_URL = "ws://192.168.1.5:8000/ws/voice"; // Replace with your laptop IP
+const BACKEND_HOST = "192.168.1.5:8000"; // Replace with your laptop IP
+const BACKEND_WS_URL = `ws://${BACKEND_HOST}/ws/voice`;
+const BACKEND_HTTP_URL = `http://${BACKEND_HOST}`;
 const VAD_THRESHOLD = -45; // dB
 const SILENCE_DURATION = 800; // ms
 
@@ -23,11 +26,14 @@ export default function App() {
   const [isRecording, setIsRecording] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
   const [lastTranscript, setLastTranscript] = useState("Standing by...");
+  const [lastAssistantText, setLastAssistantText] = useState("");
   
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const socketRef = useRef<WebSocket | null>(null);
   const recordingRef = useRef<Audio.Recording | null>(null);
   const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const assistantTextRef = useRef("");
+  const soundRef = useRef<Audio.Sound | null>(null);
 
   // --- Neural Pulse Animation ---
   useEffect(() => {
@@ -43,24 +49,101 @@ export default function App() {
     }
   }, [isRecording, isThinking]);
 
+  const blobToBase64 = async (blob: Blob): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        if (typeof reader.result === 'string') {
+          resolve(reader.result.split(',', 2)[1] || '');
+        } else {
+          reject(new Error('Failed to read audio blob.'));
+        }
+      };
+      reader.onerror = () => reject(reader.error ?? new Error('Failed to read audio blob.'));
+      reader.readAsDataURL(blob);
+    });
+  };
+
+  const speakAssistantText = async (text: string) => {
+    if (!text.trim()) return;
+
+    try {
+      if (soundRef.current) {
+        await soundRef.current.unloadAsync();
+        soundRef.current = null;
+      }
+
+      const response = await fetch(`${BACKEND_HTTP_URL}/api/voice/speak`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      if (!response.ok) {
+        console.warn('Assistant speech request failed', response.status);
+        return;
+      }
+
+      const blob = await response.blob();
+      const audioBase64 = await blobToBase64(blob);
+      const extension = response.headers.get('content-type')?.includes('mpeg') ? 'mp3' : 'wav';
+      const fileUri = `${FileSystem.cacheDirectory ?? FileSystem.documentDirectory}jarvis-tts-${Date.now()}.${extension}`;
+      await FileSystem.writeAsStringAsync(fileUri, audioBase64, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+
+      const { sound } = await Audio.Sound.createAsync({ uri: fileUri }, { shouldPlay: true });
+      soundRef.current = sound;
+      sound.setOnPlaybackStatusUpdate((status: any) => {
+        if (status?.didJustFinish) {
+          sound.unloadAsync().catch(() => {});
+          FileSystem.deleteAsync(fileUri, { idempotent: true }).catch(() => {});
+          if (soundRef.current === sound) {
+            soundRef.current = null;
+          }
+        }
+      });
+    } catch (error) {
+      console.error('Failed to play assistant speech', error);
+    }
+  };
+
   // --- WebSocket Setup ---
   useEffect(() => {
     connectWS();
-    return () => socketRef.current?.close();
+    return () => {
+      socketRef.current?.close();
+      soundRef.current?.unloadAsync().catch(() => {});
+    };
   }, []);
 
   const connectWS = () => {
-    const ws = new WebSocket(BACKEND_URL);
+    const ws = new WebSocket(BACKEND_WS_URL);
     ws.onopen = () => setIsConnected(true);
     ws.onclose = () => {
       setIsConnected(false);
       setTimeout(connectWS, 3000);
     };
     ws.onmessage = (e) => {
+      if (typeof e.data !== 'string') return;
+
       const data = JSON.parse(e.data);
       if (data.type === 'TRANSCRIPTION') setLastTranscript(data.text);
-      if (data.type === 'TURN_START') setIsThinking(true);
-      if (data.type === 'TURN_COMPLETE') setIsThinking(false);
+      if (data.type === 'TURN_START') {
+        setIsThinking(true);
+        assistantTextRef.current = "";
+        setLastAssistantText("");
+      }
+      if (data.type === 'TEXT_CHUNK') {
+        assistantTextRef.current += data.text || "";
+        setLastAssistantText(assistantTextRef.current);
+      }
+      if (data.type === 'TURN_COMPLETE') {
+        setIsThinking(false);
+        const finalText = assistantTextRef.current.trim();
+        if (finalText) {
+          speakAssistantText(finalText);
+        }
+      }
     };
     socketRef.current = ws;
   };
@@ -75,7 +158,10 @@ export default function App() {
       });
 
       const { recording } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY
+        {
+          ...Audio.RecordingOptionsPresets.HIGH_QUALITY,
+          isMeteringEnabled: true,
+        }
       );
       
       recordingRef.current = recording;
@@ -121,7 +207,12 @@ export default function App() {
       const reader = new FileReader();
       reader.onload = () => {
         const base64Audio = (reader.result as string).split(',')[1];
-        socketRef.current?.send(JSON.stringify({ type: 'AUDIO_START', data: base64Audio }));
+        socketRef.current?.send(JSON.stringify({
+          type: 'audio_input',
+          data: base64Audio,
+          mime_type: blob.type || 'audio/mp4',
+          file_name: 'mobile-recording.m4a',
+        }));
       };
       reader.readAsDataURL(blob);
     }
@@ -154,7 +245,7 @@ export default function App() {
           </TouchableOpacity>
         </Animated.View>
         <Text style={styles.statusText}>{isConnected ? "NEURAL LINK ACTIVE" : "SYNCING..."}</Text>
-        <Text style={styles.transcriptText}>{lastTranscript}</Text>
+        <Text style={styles.transcriptText}>{lastAssistantText || lastTranscript}</Text>
       </View>
 
       {/* Bento Grid */}

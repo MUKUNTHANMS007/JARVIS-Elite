@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import uuid
 import os
@@ -6,6 +7,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from ws_manager import manager
 from agent.core import get_agent_response_stream
 from services.cache_service import get_intelligence, update_intelligence
+from voice.stt import transcribe_audio
 from voice.tts import synthesize_speech_stream
 
 router = APIRouter()
@@ -73,6 +75,37 @@ async def bridge_tts_worker(client_id: str, queue: asyncio.Queue):
             break
 
 
+def _decode_audio_message(raw_audio: str | None) -> bytes:
+    if not raw_audio:
+        return b""
+
+    payload = raw_audio.split(",", 1)[-1].strip()
+    if not payload:
+        return b""
+    return base64.b64decode(payload)
+
+
+async def run_audio_turn(
+    client_id: str,
+    audio_bytes: bytes,
+    mime_type: str | None,
+    image: str | None = None,
+    file_name: str | None = None,
+) -> None:
+    try:
+        transcription = (await transcribe_audio(audio_bytes, mime_type=mime_type, file_name=file_name)).strip()
+    except Exception as exc:
+        await manager.send_json(client_id, {"type": "ERROR", "message": f"Transcription failed: {exc}"})
+        return
+
+    if not transcription:
+        await manager.send_json(client_id, {"type": "ERROR", "message": "I could not transcribe that audio."})
+        return
+
+    await manager.send_json(client_id, {"type": "TRANSCRIPTION", "text": transcription})
+    await run_agent(client_id, transcription, image)
+
+
 # --- Agent Pipeline ---
 async def run_agent(
     client_id: str,
@@ -123,6 +156,9 @@ async def run_agent(
             ws = manager.active.get(client_id)
             if ws is None or ws.client_state.name != "CONNECTED":
                 return
+
+            if not token:
+                continue
 
             await manager.send_json(client_id, {"type": "TEXT_CHUNK", "text": token})
             sentence_buffer += token
@@ -255,6 +291,31 @@ async def voice_endpoint(websocket: WebSocket) -> None:
                     await cancel_voice_task()
                     voice_task = asyncio.create_task(
                         run_agent(client_id, text, image)
+                    )
+
+                elif m_type in {"audio_input", "AUDIO_START"}:
+                    raw_audio = msg.get("data")
+                    if not raw_audio:
+                        await manager.send_json(client_id, {"type": "ERROR", "message": "Audio payload missing."})
+                        continue
+
+                    mime_type = msg.get("mime_type") or ("audio/mp4" if m_type == "AUDIO_START" else "audio/webm")
+                    file_name = msg.get("file_name")
+                    image = msg.get("image")
+
+                    try:
+                        audio_bytes = _decode_audio_message(raw_audio)
+                    except Exception as exc:
+                        await manager.send_json(client_id, {"type": "ERROR", "message": f"Invalid audio payload: {exc}"})
+                        continue
+
+                    if not audio_bytes:
+                        await manager.send_json(client_id, {"type": "ERROR", "message": "Decoded audio was empty."})
+                        continue
+
+                    await cancel_voice_task()
+                    voice_task = asyncio.create_task(
+                        run_audio_turn(client_id, audio_bytes, mime_type, image=image, file_name=file_name)
                     )
 
     except WebSocketDisconnect as exc:
