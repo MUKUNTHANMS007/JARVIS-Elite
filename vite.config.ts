@@ -4,12 +4,16 @@ import path from 'path';
 import {defineConfig, loadEnv} from 'vite';
 
 export default defineConfig(({mode}) => {
-  const env = loadEnv(mode, '.', '');
+  // Only VITE_-prefixed variables are injected into the browser bundle.
+  // Unprefixed secrets (e.g. GEMINI_API_KEY) remain server-side only.
+  const env = loadEnv(mode, '.', 'VITE_');
+
+  // DISABLE_HMR is a build-tool flag, not a browser variable — read it from
+  // process.env (populated by the shell / dotenv-cli) rather than Vite's bundle env.
+  const disableHmr = process.env.DISABLE_HMR === 'true';
+
   return {
     plugins: [react(), tailwindcss()],
-    define: {
-      'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-    },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
@@ -22,8 +26,8 @@ export default defineConfig(({mode}) => {
         ignored: ['**/backend/**'],
       },
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
-      // Do not modifyâ€”file watching is disabled to prevent flickering during agent edits.
-      hmr: process.env.DISABLE_HMR !== 'true',
+      // Do not modify — file watching is disabled to prevent flickering during agent edits.
+      hmr: !disableHmr,
     },
   };
 });

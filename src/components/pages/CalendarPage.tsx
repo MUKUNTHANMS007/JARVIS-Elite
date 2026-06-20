@@ -50,7 +50,7 @@ export function CalendarPage() {
         body: JSON.stringify({
           title: newEvent.title,
           event_date: formattedDate,
-          event_time: startTime || null,
+          event_time: startTime && endTime ? `${startTime} - ${endTime}` : (startTime || null),
           category: newEvent.category
         })
       });
@@ -58,6 +58,7 @@ export function CalendarPage() {
       setNewEvent({ title: "", category: "Task" });
       setSelectedDate(new Date());
       setStartTime("10:30:00");
+      setEndTime("11:30:00");
       fetchEvents();
     } catch (err) {
       console.error("Failed to add event:", err);

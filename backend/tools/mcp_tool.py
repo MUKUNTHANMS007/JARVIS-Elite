@@ -1,6 +1,8 @@
+import os
+from pathlib import Path
 from fastmcp import FastMCP
 from agent.memory import (
-    get_calendar_events_db, 
+    get_calendar_events_db,
     save_calendar_event,
     get_projects_db,
     save_project_milestone,
@@ -13,6 +15,31 @@ from tools.github_tool import (
     create_github_issue
 )
 from tools.leetcode_tool import sync_leetcode_intelligence, get_placement_roadmap
+
+# ---------------------------------------------------------------------------
+# Safe root directory for file-inspection tools.
+# Only files under this directory may be read by inspect_system_logs /
+# analyze_code_error — path traversal attempts are rejected.
+# ---------------------------------------------------------------------------
+_BACKEND_ROOT = Path(os.path.dirname(os.path.abspath(__file__))).parent.resolve()
+_LOG_ROOT = (_BACKEND_ROOT / "logs").resolve()
+
+
+def _safe_backend_path(filename: str) -> Path | None:
+    """
+    Resolve `filename` relative to the backend root and verify it stays
+    inside that root.  Returns the resolved Path, or None if the resolved
+    path escapes the root (path-traversal attempt).
+    """
+    # Strip any directory separators — we only accept bare filenames
+    safe_name = Path(filename).name  # e.g. "main.py", NOT "../.env"
+    candidate = (_BACKEND_ROOT / safe_name).resolve()
+    try:
+        candidate.relative_to(_BACKEND_ROOT)  # raises ValueError if outside
+        return candidate
+    except ValueError:
+        return None
+
 
 # Initialize FastMCP - the "USB-C" for Jarvis Tools
 mcp = FastMCP("Jarvis-Core")
@@ -28,7 +55,7 @@ async def manage_project_vault(title: str, milestone: str, tech_stack: str = Non
     """
     if action == "fetch":
         return await get_projects_db("JARVIS_ADMIN")
-    
+
     stack_list = [s.strip() for s in tech_stack.split(",")] if tech_stack else None
     await save_project_milestone("JARVIS_ADMIN", title, milestone, stack_list)
     return f"Sir, the Project Vault has been updated for '{title}'. Milestone recorded: {milestone}"
@@ -42,7 +69,7 @@ async def track_skill_mastery(category: str, action: str = "fetch"):
     """
     if action == "fetch":
         return await get_skill_levels_db("JARVIS_ADMIN")
-    
+
     await update_skill_level("JARVIS_ADMIN", category)
     return f"Mastery updated for {category}. Keep pushing, Sir."
 
@@ -86,41 +113,58 @@ async def add_calendar_event(title: str, date: str, time: str = None, descriptio
     }
 
 @mcp.tool()
-def inspect_system_logs(lines: int = 15):
+def inspect_system_logs(lines: int = 15) -> str:
     """
-    Reads the last few lines of the JARVIS system log to diagnose errors.
+    Reads the last N lines of the JARVIS agent error log to diagnose errors.
     Use this if the user asks 'What went wrong?' or 'Check the logs'.
     """
-    log_path = "d:/JARVIS/backend/main.py" # For now, we use the main logic file as a sanity check
+    log_path = _LOG_ROOT / "agent_error.log"
+    # Verify the log file is inside the expected logs directory
     try:
+        log_path.resolve().relative_to(_LOG_ROOT)
+    except ValueError:
+        return "Error: Log path escaped safe directory."
+
+    try:
+        if not log_path.exists():
+            return "No error log found — the system appears clean."
         with open(log_path, "r", encoding="utf-8") as f:
             content = f.readlines()
-            return "".join(content[-lines:])
+        return "".join(content[-max(1, min(lines, 200)):])  # cap at 200 lines
     except Exception as e:
-        return f"Error reading logs: {e}"
+        return f"Error reading log: {e}"
 
 @mcp.tool()
-def analyze_code_error(file_basename: str):
+def analyze_code_error(file_basename: str) -> str:
     """
-    Deep-scans a specific backend file for syntax or logic mistakes.
-    :param file_basename: The name of the file (e.g., 'main.py' or 'leetcode_tool.py')
+    Reads the first 2000 characters of a specific backend file to help
+    diagnose syntax or logic errors.
+    :param file_basename: Bare filename only (e.g., 'main.py').
+                          Directory separators and '..' are rejected.
     """
-    base_path = "d:/JARVIS/backend/"
+    safe_path = _safe_backend_path(file_basename)
+    if safe_path is None:
+        return (
+            f"Refused to read '{file_basename}': path resolves outside the "
+            "backend directory. Only bare filenames are accepted."
+        )
+    if not safe_path.exists():
+        return f"File '{file_basename}' not found in the backend directory."
     try:
-        with open(base_path + file_basename, "r", encoding="utf-8") as f:
-            return f.read()[:2000] # Return first 2k chars for analysis
+        with open(safe_path, "r", encoding="utf-8") as f:
+            return f.read()[:2000]
     except Exception as e:
-        return f"Could not find or read {file_basename}: {e}"
+        return f"Could not read {file_basename}: {e}"
 
 @mcp.tool()
 async def sync_and_recommend_coding():
     """
-    Syncs LeetCode stats (Total/Streak) and provides PSG iTech 
+    Syncs LeetCode stats (Total/Streak) and provides PSG iTech
     placement recommendations for Amazon, Zoho, and Goldman Sachs.
     """
     intel = await sync_leetcode_intelligence()
     if "error" in intel: return f"Sir, I tried to sync your radar but: {intel['error']}"
-    
+
     roadmap = await get_placement_roadmap()
     return f"{intel['message']}\n\n{roadmap}"
 

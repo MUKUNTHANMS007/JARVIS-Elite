@@ -306,56 +306,55 @@ async def get_skill_levels_db(user_id: str) -> list:
 async def get_leetcode_streak_db(user_id: str) -> int:
     """
     Calculates the current consecutive daily streak from Supabase.
-    Counts backwards from today for every day with completed=True.
+    Counts backwards from today (or yesterday if today isn't done yet)
+    for every day with completed=True.
     """
     global supabase
     if not supabase: await init_db()
     if not supabase: return 0
     try:
         from datetime import date, timedelta
-        
+
         # Fetch the last 30 days of schedule for this user
         today = date.today()
         start_date = today - timedelta(days=30)
-        
+
         result = await supabase.table("leetcode_daily") \
             .select("scheduled_date, completed") \
             .eq("user_id", user_id) \
             .gte("scheduled_date", str(start_date)) \
             .order("scheduled_date", desc=True) \
             .execute()
-        
+
         data = result.data
         if not data: return 0
-        
-        streak = 0
-        current_check = today
-        
-        # Create a map for fast lookup
+
+        # Build a fast lookup map
         completion_map = {row["scheduled_date"]: row["completed"] for row in data}
-        
-        # Check consecutive days (including today or starting from yesterday if today isn't done)
-        # If today is NOT completed, the streak might still be active from yesterday.
-        # But if yesterday is also NOT completed, streak is 0.
-        
-        # Start checking from today
-        date_to_check = today
-        while str(date_to_check) in completion_map:
-            if completion_map[str(date_to_check)]:
+
+        # If today is not yet completed, the streak can still be alive from
+        # yesterday — start counting from yesterday in that case.
+        today_done = completion_map.get(str(today), False)
+        date_to_check = today if today_done else today - timedelta(days=1)
+
+        streak = 0
+        while True:
+            key = str(date_to_check)
+            if key not in completion_map:
+                # Day not recorded at all — streak ends here
+                break
+            if completion_map[key]:
                 streak += 1
                 date_to_check -= timedelta(days=1)
             else:
-                # If today is not completed, check if yesterday was.
-                if date_to_check == today:
-                    date_to_check -= timedelta(days=1)
-                    continue
-                else:
-                    break
-        
+                # Day recorded but not completed — streak broken
+                break
+
         return streak
     except Exception as e:
         print(f"[Memory] Streak Calculation Error: {e}")
         return 0
+
 
 async def get_system_pulse_db() -> dict:
     """Fetch pre-aggregated system pulse asynchronously."""

@@ -12,6 +12,27 @@ from voice.tts import synthesize_speech_stream
 
 router = APIRouter()
 
+# ---------------------------------------------------------------------------
+# WebSocket Auth
+# ---------------------------------------------------------------------------
+# Set WS_AUTH_TOKEN in your .env to enable shared-secret auth on /ws/voice.
+# Without this env var the endpoint remains open (localhost-only fallback).
+# Example .env entry:  WS_AUTH_TOKEN=change-me-to-a-long-random-secret
+_WS_AUTH_TOKEN: str | None = os.environ.get("WS_AUTH_TOKEN")
+
+
+async def _authenticate_ws(websocket: WebSocket) -> bool:
+    """Return True if the handshake is allowed. Closes the socket and returns
+    False on failure so callers can simply `return` immediately."""
+    if not _WS_AUTH_TOKEN:
+        # No token configured — accept all (pure localhost dev mode).
+        return True
+    provided = websocket.query_params.get("token", "")
+    if provided != _WS_AUTH_TOKEN:
+        await websocket.close(code=4401, reason="Unauthorized")
+        return False
+    return True
+
 BATMAN_TRIGGER = "gotham needs batman"
 BATMAN_DEACTIVATE = "gotham is safe now"
 
@@ -71,8 +92,13 @@ async def bridge_tts_worker(client_id: str, queue: asyncio.Queue):
         except asyncio.CancelledError:
             break
         except Exception as e:
-            print(f"[TTS Worker Error] {e}")
-            break
+            # Log but continue — a single bad sentence shouldn't silence the
+            # entire turn. task_done() keeps the queue from blocking.
+            print(f"[TTS Worker Error] Skipping sentence chunk: {e}")
+            try:
+                queue.task_done()
+            except Exception:
+                pass
 
 
 def _decode_audio_message(raw_audio: str | None) -> bytes:
@@ -247,17 +273,48 @@ async def _send_turn(
 
 @router.websocket("/ws/voice")
 async def voice_endpoint(websocket: WebSocket) -> None:
+    # --- AUTH GATE ---
+    # Accept first so we can send the close frame; reject after.
+    await websocket.accept()
+    if _WS_AUTH_TOKEN:
+        provided = websocket.query_params.get("token", "")
+        if provided != _WS_AUTH_TOKEN:
+            await websocket.close(code=4401, reason="Unauthorized")
+            return
+    else:
+        # Fallback security: restrict to loopback/localhost when no token is defined
+        client = websocket.client
+        if client is None or client.host not in {"127.0.0.1", "::1", "localhost", "testclient"}:
+            await websocket.close(
+                code=4401,
+                reason="Unauthorized: Remote connections rejected when WS_AUTH_TOKEN is not configured"
+            )
+            return
+
     client_id = str(uuid.uuid4())
-    await manager.connect(websocket, client_id)
+    # Register *after* auth passes (manager.connect also calls accept, so we
+    # replicate its bookkeeping manually here instead).
+    import time as _time
+    manager.active[client_id] = websocket
+    manager.locks[client_id] = asyncio.Lock()
+    manager.metadata[client_id] = {"connected_at": _time.time(), "batman_mode": False}
+    print(f"[WS Manager] Client connected: {client_id} | Total: {len(manager.active)}")
+
     voice_task: asyncio.Task | None = None
 
     async def cancel_voice_task() -> None:
+        """Cancel an in-flight turn and notify the frontend so isThinking resets."""
         nonlocal voice_task
         if voice_task and not voice_task.done():
             voice_task.cancel()
             try:
                 await voice_task
             except (asyncio.CancelledError, Exception):
+                pass
+            # Notify frontend: previous turn was interrupted — reset thinking state.
+            try:
+                await manager.send_json(client_id, {"type": "TURN_COMPLETE"})
+            except Exception:
                 pass
         voice_task = None
 

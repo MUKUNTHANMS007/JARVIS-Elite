@@ -3,11 +3,19 @@ import hashlib
 import requests
 import json
 import time
+import os
+import sys
 
 # J.A.R.V.I.S. Neural Sentinel (Local Mock Trigger)
 # Simulation of a Cloudflare Worker notifying the Core API.
 
-SECRET = "J_SENTINEL_SECURE_2026"
+SECRET = os.environ.get("NEURAL_EDGE_SECRET")
+if not SECRET:
+    sys.exit(
+        "[Sentinel Mock] NEURAL_EDGE_SECRET environment variable is not set. "
+        "Set it in your .env file or shell before running this script."
+    )
+
 CORE_URL = "http://localhost:8000/api/neural/edge-trigger"
 
 payload = {

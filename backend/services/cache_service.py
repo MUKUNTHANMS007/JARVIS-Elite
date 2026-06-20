@@ -1,15 +1,28 @@
 import time
 import os
 import json
+import threading
+import tempfile
 from typing import Dict, Any
 
-# Setup Communication Log
+# Setup Logs Dir
 LOGS_DIR = os.path.join(os.path.dirname(__file__), "..", "logs")
 if not os.path.exists(LOGS_DIR): os.makedirs(LOGS_DIR)
 COMM_LOG = os.path.join(LOGS_DIR, "communication.log")
+SYNC_FILE = os.path.join(LOGS_DIR, "intelligence_sync.json")
+
+# Maximum size for the communication log before rotation (5 MB)
+_COMM_LOG_MAX_BYTES = 5 * 1024 * 1024
+
+# Thread lock protecting all writes to INTELLIGENCE_HUB and the sync file.
+# A single RLock is sufficient because all callers are in the same process.
+_hub_lock = threading.RLock()
+
 
 def notify_communication(source: str, target: str, latency: float, metadata: Dict = None):
-    """Logs internal/external communication events for neural auditing."""
+    """Logs internal/external communication events for neural auditing.
+    Rotates the log file when it exceeds _COMM_LOG_MAX_BYTES.
+    """
     event = {
         "timestamp": time.time(),
         "source": source,
@@ -17,15 +30,23 @@ def notify_communication(source: str, target: str, latency: float, metadata: Dic
         "latency_ms": round(latency * 1000, 2),
         "metadata": metadata or {}
     }
-    with open(COMM_LOG, "a") as f:
-        f.write(json.dumps(event) + "\n")
+    try:
+        # Rotate if over size limit
+        if os.path.exists(COMM_LOG) and os.path.getsize(COMM_LOG) >= _COMM_LOG_MAX_BYTES:
+            rotated = COMM_LOG + ".1"
+            if os.path.exists(rotated):
+                os.remove(rotated)
+            os.rename(COMM_LOG, rotated)
+        with open(COMM_LOG, "a") as f:
+            f.write(json.dumps(event) + "\n")
+    except Exception as e:
+        print(f"[Cache Comm Log] Write error: {e}")
+
 
 # --- NEURAL STATE (Intelligence Cache) ---
-# A globally shared object that holds in-memory snapshots of 
-# API-bound tools to ensure <150ms dashboard response times.
-# Now file-backed to support multi-process distributed architecture.
-
-SYNC_FILE = os.path.join(LOGS_DIR, "intelligence_sync.json")
+# Pure in-memory dict — the single source of truth at runtime.
+# Written to disk only on update (for crash recovery), NOT read on every get().
+# The disk file is loaded once at startup via _load_from_disk_once().
 
 INTELLIGENCE_HUB: Dict[str, Any] = {
     "gmail_unread": 0,
@@ -42,37 +63,66 @@ INTELLIGENCE_HUB: Dict[str, Any] = {
     "mood_score": 0.0
 }
 
+_disk_loaded = False
+
+
+def _load_from_disk_once():
+    """Load persisted state from disk exactly once at startup.
+    Subsequent calls are no-ops — hot-path callers always use the in-memory dict.
+    """
+    global _disk_loaded
+    if _disk_loaded:
+        return
+    with _hub_lock:
+        if _disk_loaded:
+            return
+        if os.path.exists(SYNC_FILE):
+            try:
+                with open(SYNC_FILE, "r") as f:
+                    data = json.load(f)
+                INTELLIGENCE_HUB.update(data)
+                print("[Cache] Restored intelligence state from disk.")
+            except Exception as e:
+                print(f"[Cache] Could not restore state from disk: {e}")
+        _disk_loaded = True
+
+
 def _persist_to_disk():
-    """Internal: Atomic write to JSON for multi-process sync."""
+    """Atomic write: write to a temp file, then rename over the target.
+    Rename is atomic on POSIX; on Windows it replaces the target atomically
+    since Python 3.3+ (os.replace).
+    Must be called while _hub_lock is held.
+    """
     try:
-        with open(SYNC_FILE, "w") as f:
-            json.dump(INTELLIGENCE_HUB, f, indent=2)
+        dir_ = os.path.dirname(SYNC_FILE)
+        with tempfile.NamedTemporaryFile(
+            mode="w", dir=dir_, suffix=".tmp", delete=False
+        ) as tf:
+            json.dump(INTELLIGENCE_HUB, tf, indent=2, default=str)
+            tmp_path = tf.name
+        os.replace(tmp_path, SYNC_FILE)
     except Exception as e:
         print(f"[Cache Sync Error] Write failure: {e}")
-
-def _load_from_disk():
-    """Internal: Refresh in-memory state from disk."""
-    global INTELLIGENCE_HUB
-    if os.path.exists(SYNC_FILE):
         try:
-            with open(SYNC_FILE, "r") as f:
-                data = json.load(f)
-                INTELLIGENCE_HUB.update(data)
-        except Exception: pass
+            os.remove(tmp_path)
+        except Exception:
+            pass
 
-def get_intelligence():
-    """Access the global in-memory state, refreshed from disk."""
-    _load_from_disk()
+
+# Eagerly load from disk when this module is first imported.
+_load_from_disk_once()
+
+
+def get_intelligence() -> Dict[str, Any]:
+    """Return the in-memory intelligence hub.
+    No disk I/O — safe to call from async hot paths."""
     return INTELLIGENCE_HUB
 
+
 def update_intelligence(key: str, data: Any):
-    """Safely updates a specific intelligence node and persists to disk."""
-    global INTELLIGENCE_HUB
-    # Refresh before update to avoid stomping concurrent changes
-    _load_from_disk()
-    
-    INTELLIGENCE_HUB[key] = data
-    INTELLIGENCE_HUB["last_synced"] = time.time()
-    INTELLIGENCE_HUB["status"] = "online"
-    
-    _persist_to_disk()
+    """Atomically update a single intelligence node and persist to disk."""
+    with _hub_lock:
+        INTELLIGENCE_HUB[key] = data
+        INTELLIGENCE_HUB["last_synced"] = time.time()
+        INTELLIGENCE_HUB["status"] = "online"
+        _persist_to_disk()

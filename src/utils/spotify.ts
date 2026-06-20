@@ -6,7 +6,7 @@ import { HUB_URL } from "./apiConfig";
  */
 export const controlSpotify = async (action: 'play' | 'pause' | 'next' | 'prev') => {
   try {
-    const res = await fetch(`${HUB_URL}/api/spotify/control?action=${action}`, {
+    const res = await fetch(`${HUB_URL}/api/briefing/spotify/control?action=${action}`, {
       method: 'POST'
     });
     return await res.json();

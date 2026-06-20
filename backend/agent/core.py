@@ -267,15 +267,31 @@ GROQ_TOOLS = [
     }
 ]
 
-_session_cache = {}
+# Session history cache — bounded to prevent unbounded memory growth.
+# At most _SESSION_CACHE_MAX distinct user_ids are kept; the oldest entry
+# is evicted when the cap is reached (simple LRU-lite via insertion order).
+_SESSION_CACHE_MAX = 128
+_session_cache: dict = {}
+
+
+def _session_cache_evict_if_needed():
+    """Drop the oldest entry when the cache exceeds the size cap."""
+    while len(_session_cache) >= _SESSION_CACHE_MAX:
+        oldest = next(iter(_session_cache))
+        del _session_cache[oldest]
+        logger.info(f"[Session Cache] Evicted oldest entry: {oldest}")
+
 
 async def get_cached_history(user_id: str, limit: int = 8):
     if user_id not in _session_cache:
+        _session_cache_evict_if_needed()
         _session_cache[user_id] = await get_history(user_id=user_id, limit=limit)
     return _session_cache[user_id][-limit:]
 
 async def update_cached_history(user_id: str, user_text: str, response: str):
-    if user_id not in _session_cache: _session_cache[user_id] = []
+    if user_id not in _session_cache:
+        _session_cache_evict_if_needed()
+        _session_cache[user_id] = []
     _session_cache[user_id].append({"role": "user", "content": user_text})
     _session_cache[user_id].append({"role": "assistant", "content": response})
     _session_cache[user_id] = _session_cache[user_id][-20:]
@@ -394,7 +410,14 @@ async def get_agent_response_stream(user_text: str, user_id: str = "JARVIS_ADMIN
             
             # Surface critical schema or connectivity errors to the turn
             if "validation failed" in str(e).lower() or "not match schema" in str(e).lower():
-                yield f"Sir, I encountered a Neural Alignment Drift: {str(e)}. Attempting to recalibrate..."
+                err_text = f"Sir, I encountered a Neural Alignment Drift: {str(e)}. Attempting to recalibrate..."
+                full_text += err_text
+                yield err_text
+            else:
+                # Fallback: always surface something so the user isn't left with silence.
+                err_text = "Sir, I encountered an internal error. Please try again in a moment."
+                full_text += err_text
+                yield err_text
             break
 
         # Parse text-based function tags if native tool calls were not populated
@@ -444,11 +467,20 @@ async def get_agent_response_stream(user_text: str, user_id: str = "JARVIS_ADMIN
                     except: pass
 
                 if not handler: return tc["id"], fn_name, "Error: Protocol not located in registry."
-                
-                res = await handler(**args) if asyncio.iscoroutinefunction(handler) else handler(**args)
-                
-                # 2. Update Neural Cache
-                neural_cache.cache_tool_result(fn_name, args, res)
+
+                # Run sync tools in a thread to avoid blocking the async event loop.
+                # Every blocking network call (Gmail, Spotify, GitHub) goes through here.
+                if asyncio.iscoroutinefunction(handler):
+                    res = await handler(**args)
+                else:
+                    res = await asyncio.to_thread(handler, **args)
+
+                # Cache only successful results — transient errors (strings starting
+                # with "Error:") must not be memoized for 5 minutes.
+                res_str = str(res)
+                if not res_str.startswith("Error:"):
+                    neural_cache.cache_tool_result(fn_name, args, res)
+
                 
                 return tc["id"], fn_name, str(res)
             except Exception as ex:

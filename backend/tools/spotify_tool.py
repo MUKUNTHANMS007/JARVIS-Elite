@@ -3,9 +3,11 @@ from spotipy.oauth2 import SpotifyOAuth
 import os
 from spotipy.exceptions import SpotifyException
 import time
+import threading
 
 # Neural Block: MANUAL OVERRIDE IN PROGRESS...
 _SPOTIFY_RESTRICTED_UNTIL = 0 
+_spotify_restricted_lock = threading.Lock() 
 
 def get_spotify_client():
     """Returns an authenticated Spotipy client using root .env configuration."""
@@ -130,13 +132,14 @@ def get_current_track_data() -> dict:
     """Retrieve raw info about what is currently playing on Spotify for API use."""
     global _SPOTIFY_RESTRICTED_UNTIL
     
-    # Self-Healing: Retry every 5 minutes if Premium restriction was hit
-    if _SPOTIFY_RESTRICTED_UNTIL > 0:
-        if time.time() < _SPOTIFY_RESTRICTED_UNTIL:
-            return {"status": "restricted"}
-        else:
-            print("[Spotify Tool] Cool-down expired. Re-attempting Neural Handshake...")
-            _SPOTIFY_RESTRICTED_UNTIL = 0
+    with _spotify_restricted_lock:
+        # Self-Healing: Retry every 5 minutes if Premium restriction was hit
+        if _SPOTIFY_RESTRICTED_UNTIL > 0:
+            if time.time() < _SPOTIFY_RESTRICTED_UNTIL:
+                return {"status": "restricted"}
+            else:
+                print("[Spotify Tool] Cool-down expired. Re-attempting Neural Handshake...")
+                _SPOTIFY_RESTRICTED_UNTIL = 0
 
     try:
         sp = get_spotify_client()
@@ -157,7 +160,8 @@ def get_current_track_data() -> dict:
     except SpotifyException as e:
         if e.http_status == 403:
             print(f"[Spotify Tool] 403 Restricted (Premium Required). Blocking for 5 mins.")
-            _SPOTIFY_RESTRICTED_UNTIL = time.time() + 300
+            with _spotify_restricted_lock:
+                _SPOTIFY_RESTRICTED_UNTIL = time.time() + 300
             return {"status": "restricted"}
         return {"status": "error"}
     except Exception as e:
@@ -200,12 +204,26 @@ def get_spotify_recommendations() -> str:
             return "I need you to be listening to something first to give recommendations, Sir."
             
         track_id = current['item']['id']
-        recs = sp.recommendations(seed_tracks=[track_id], limit=5)
-        
-        res = "Based on what you're listening to, you might like:\n"
-        for track in recs['tracks']:
-            res += f"- {track['name']} by {track['artists'][0]['name']}\n"
-            
-        return res
+        try:
+            recs = sp.recommendations(seed_tracks=[track_id], limit=5)
+            res = "Based on what you're listening to, you might like:\n"
+            for track in recs['tracks']:
+                res += f"- {track['name']} by {track['artists'][0]['name']}\n"
+            return res
+        except Exception as e:
+            # Fallback: Query top tracks by the current artist if recommendations API fails/404s
+            try:
+                artist_id = current['item']['artists'][0]['id']
+                artist_name = current['item']['artists'][0]['name']
+                top_tracks = sp.artist_top_tracks(artist_id, country='US')
+                recs_tracks = top_tracks.get('tracks', [])[:5]
+                if not recs_tracks:
+                    return f"Recommendation Fallback: Could not find any top tracks for artist {artist_name}."
+                res = f"Based on your current artist ({artist_name}), you might like their top tracks:\n"
+                for track in recs_tracks:
+                    res += f"- {track['name']} by {track['artists'][0]['name']}\n"
+                return res
+            except Exception as fe:
+                return f"Recommendation Error: {e} (Fallback also failed: {fe})"
     except Exception as e:
         return f"Recommendation Error: {e}"

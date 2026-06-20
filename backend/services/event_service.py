@@ -13,7 +13,7 @@ async def broadcast_timer_event(event_type: str, duration: int = None):
         payload["duration"] = duration
     
     dead_links = set()
-    for ws in focus_connections:
+    for ws in list(focus_connections):
         try:
             # Send events to all connected dashboard and neural link tabs
             await ws.send_json(payload)

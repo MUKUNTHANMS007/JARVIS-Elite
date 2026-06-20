@@ -1,4 +1,4 @@
-import asyncio, uuid, psutil, time
+import asyncio, uuid, psutil, time, logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from ws_manager import manager
 from services.cache_service import get_intelligence, update_intelligence
@@ -8,6 +8,22 @@ router = APIRouter()
 
 @router.websocket("/ws/system")
 async def system_pulse(websocket: WebSocket):
+    # Secure connection
+    import os
+    token = os.environ.get("WS_AUTH_TOKEN")
+    if token:
+        provided = websocket.query_params.get("token", "")
+        if provided != token:
+            await websocket.accept()
+            await websocket.close(code=4401, reason="Unauthorized")
+            return
+    else:
+        client = websocket.client
+        if client is None or client.host not in {"127.0.0.1", "::1", "localhost", "testclient"}:
+            await websocket.accept()
+            await websocket.close(code=4401, reason="Unauthorized")
+            return
+
     client_id = f"hub_{uuid.uuid4()}"
     await manager.connect(websocket, client_id)
     print(f"[Hub] Handshake established for {client_id}")
@@ -29,24 +45,26 @@ async def system_pulse(websocket: WebSocket):
                     print(f"[Hub] Focus fetch error: {fe}")
                     focus_data = None
 
-                # Fetch Proactive Alerts from Hub
-                proactive_trigger = None
+                # Fetch ALL Proactive Alerts from Hub and drain them in one pulse
+                proactive_triggers_list = []
                 triggers = hub.get("proactive_triggers", {})
                 if triggers:
-                    trigger_keys = sorted(triggers.keys(), key=lambda x: triggers[x].get("timestamp", 0))
-                    if trigger_keys:
-                        latest_key = trigger_keys[-1]
-                        t_data = triggers[latest_key]
-                        proactive_trigger = {
-                            "id": latest_key,
-                            "type": t_data["type"],
-                            "title": t_data["title"],
+                    for t_key, t_data in list(triggers.items()):
+                        # Use .get() with safe defaults — bare indexing caused KeyError
+                        # crashes in the sender loop if a trigger was missing a field.
+                        proactive_triggers_list.append({
+                            "id": t_key,
+                            "type": t_data.get("type", "ALERT"),
+                            "title": t_data.get("title", "Incoming Alert"),
                             "message": t_data.get("message", ""),
-                            "timestamp": t_data["timestamp"],
-                            "diff": round((t_data["timestamp"] - time.time()) / 60) # mins
-                        }
-                        triggers.pop(latest_key)
-                        update_intelligence("proactive_triggers", triggers)
+                            "timestamp": t_data.get("timestamp", 0),
+                            "diff": round((t_data.get("timestamp", 0) - time.time()) / 60)
+                        })
+                        triggers.pop(t_key)
+                    update_intelligence("proactive_triggers", triggers)
+
+                # For backward-compat the dashboard key sends the first/only trigger
+                proactive_trigger = proactive_triggers_list[0] if proactive_triggers_list else None
 
                 packet = {
                     "type": "SYSTEM_PULSE",
@@ -78,6 +96,20 @@ async def system_pulse(websocket: WebSocket):
             print(f"[Hub Sender] Error for {client_id}: {e}")
 
     sender_task = asyncio.create_task(sender())
+
+    # Guard: if the sender task dies unexpectedly (e.g. malformed proactive trigger),
+    # close the WebSocket so the receiver loop doesn't silently idle with no pulses.
+    def _on_sender_done(task: asyncio.Task):
+        if not task.cancelled() and task.exception() is not None:
+            exc = task.exception()
+            logging.getLogger("JARVIS-HUB").error(
+                f"[Hub Sender] Task died unexpectedly for {client_id}: {exc!r}. "
+                "Closing WebSocket to prevent stale connection."
+            )
+            # Schedule close without blocking the callback
+            asyncio.create_task(websocket.close(1011))
+
+    sender_task.add_done_callback(_on_sender_done)
 
     try:
         # Keep connection open and listen for close frames or messages

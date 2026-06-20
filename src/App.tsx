@@ -32,7 +32,27 @@ export default function App() {
     if (isBatman) {
         document.documentElement.classList.add("batman-theme");
         document.title = "BATCOMPUTER — NEURAL CORE";
-        new Audio("/sounds/batman-activate.mp3").play().catch(() => {});
+        try {
+          const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+          if (AudioContextClass) {
+            const ctx = new AudioContextClass();
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = "sine";
+            osc.frequency.setValueAtTime(150, ctx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(600, ctx.currentTime + 0.4);
+            gain.gain.setValueAtTime(0.15, ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.4);
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start();
+            osc.stop(ctx.currentTime + 0.45);
+          } else {
+            new Audio("/sounds/batman-activate.mp3").play().catch(() => {});
+          }
+        } catch (e) {
+          new Audio("/sounds/batman-activate.mp3").play().catch(() => {});
+        }
     } else {
         document.documentElement.classList.remove("batman-theme");
         document.title = "JARVIS — NEURAL CORE";

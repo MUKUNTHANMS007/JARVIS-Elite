@@ -9,6 +9,11 @@ export function useWakeWord(onTrigger: (command: string) => void) {
     const [isWakeWordEnabled, setIsWakeWordEnabled] = useState(true);
     const recognitionRef = useRef<any>(null);
     const isWakeWordActiveRef = useRef(true);
+    const onTriggerRef = useRef(onTrigger);
+
+    useEffect(() => {
+        onTriggerRef.current = onTrigger;
+    }, [onTrigger]);
 
     useEffect(() => {
         isWakeWordActiveRef.current = isWakeWordEnabled;
@@ -40,12 +45,12 @@ export function useWakeWord(onTrigger: (command: string) => void) {
             }
 
             const lowerText = (finalTranscript + " " + interimTranscript).toLowerCase();
-            const isWakeWordTrigger = lowerText.includes('jarvis') || lowerText.includes('travis') || lowerText.includes('garvis');
+            const isWakeWordTrigger = /\b(jarvis|travis|garvis)\b/i.test(lowerText);
 
             if (isWakeWordTrigger) {
                 if (finalTranscript) {
-                    const command = (finalTranscript).replace(/jarvis|travis|garvis/gi, "JARVIS").trim();
-                    onTrigger(command);
+                    const command = (finalTranscript).replace(/\b(jarvis|travis|garvis)\b/gi, "JARVIS").trim();
+                    onTriggerRef.current(command);
                     recognition.stop(); // Temporarily stop to let the main IO take over
                 }
             }
@@ -76,7 +81,7 @@ export function useWakeWord(onTrigger: (command: string) => void) {
             isWakeWordActiveRef.current = false;
             try { recognition.stop(); } catch (e) {}
         };
-    }, [onTrigger]);
+    }, []);
 
     // Manual control for pausing wake word (e.g. during active recording)
     const pauseWakeWord = () => {

@@ -1,10 +1,26 @@
 import os
 import subprocess
+from pathlib import Path
+
+_REPO_ROOT = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))).resolve()
 
 def get_project_activity(directory: str = "D:/JARVIS") -> str:
     """Read the last 3 commit messages to see recent work activity in a specified project."""
-    # Ensure directory is absolute and canonicalized
     abs_path = os.path.abspath(directory)
+    
+    # Boundary check: Ensure path is contained within authorized repository/workspace roots
+    try:
+        resolved_path = Path(abs_path).resolve()
+        # Check if resolved path is inside our repo root
+        resolved_path.relative_to(_REPO_ROOT)
+    except (ValueError, RuntimeError):
+        try:
+            # Fallback to check if it's inside the D:/JARVIS root specifically
+            alt_root = Path("D:/JARVIS").resolve()
+            resolved_path.relative_to(alt_root)
+        except (ValueError, RuntimeError):
+            return f"Access denied: Directory '{directory}' lies outside the authorized project workspace."
+
     if not os.path.exists(abs_path):
         return f"Directory '{directory}' does not exist on your computer."
     

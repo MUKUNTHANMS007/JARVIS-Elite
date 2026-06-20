@@ -45,8 +45,10 @@ class ConnectionManager:
                 try:
                     await ws.send_bytes(data)
                 except Exception as e:
-                    print(f"[WS Manager] Byte send failed for {client_id}: {e}")
-                    self.disconnect(client_id, reason=f"SendBytesError: {e}")
+                    # Do NOT disconnect on a single audio-chunk failure — just skip the chunk.
+                    # Disconnecting here was causing the entire voice session to die after
+                    # one TTS error, making all subsequent turns silently ignored.
+                    print(f"[WS Manager] Byte send failed for {client_id} (chunk skipped): {e}")
     
     async def broadcast(self, data: dict, exclude: str = None):
         """Send to all connected clients."""

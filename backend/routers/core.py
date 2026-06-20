@@ -112,12 +112,12 @@ async def start_focus_routine(user_id: str = "JARVIS_ADMIN"):
     focus_stats = await get_today_focus_db()
     
     # Construct a high-fidelity greeting
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     hour = now.hour
     greeting = "Good evening" if hour >= 18 else "Good afternoon" if hour >= 12 else "Good morning"
     
     # Check for Batman Mode
-    is_batman = INTELLIGENCE_HUB.get(f"batman_mode_{user_id}", False)
+    is_batman = INTELLIGENCE_HUB.get("batman_mode", False)
     if is_batman:
         briefing = f"Good evening, Master Wayne. The Batcomputer is initialized. Gotham requires your attention. Your focus for tonight is: {focus_stats.get('task', 'maintaining the mission')}."
     else:

@@ -24,7 +24,7 @@ def get_dynamic_prompt(user_id="JARVIS_ADMIN"):
     time_str = now.strftime("%Y-%m-%d %H:%M:%S")
     os_p = platform.system()
 
-    is_batman = get_intelligence().get(f"batman_mode_{user_id}", False)
+    is_batman = get_intelligence().get("batman_mode", False)
     if is_batman:
         return ALFRED_PROMPT
 

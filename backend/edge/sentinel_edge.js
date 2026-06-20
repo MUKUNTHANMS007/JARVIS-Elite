@@ -22,12 +22,26 @@ async function handleSentinelCheck(env) {
   }
 
   const now = new Date();
+  const later = new Date(now.getTime() + 15 * 60000);
+  
   const today = now.toISOString().split('T')[0];
-  const fifteenMinsLater = new Date(now.getTime() + 15 * 60000).toISOString();
+  const tomorrow = later.toISOString().split('T')[0];
+  
+  const nowTime = now.toTimeString().split(' ')[0];
+  const laterTime = later.toTimeString().split(' ')[0];
+
+  let filter;
+  if (today === tomorrow) {
+    // Same day
+    filter = `or=(and(event_date.eq.${today},event_time.gte.${nowTime},event_time.lte.${laterTime}))`;
+  } else {
+    // Midnight Crossover
+    filter = `or=(and(event_date.eq.${today},event_time.gte.${nowTime}),and(event_date.eq.${tomorrow},event_time.lte.${laterTime}))`;
+  }
 
   try {
     // 1. Scan Calendar for Imminent Events (within 15 minutes)
-    const calUrl = `${SUPABASE_URL}/rest/v1/calendar_events?event_date=eq.${today}&event_time=gte.${now.toTimeString().split(' ')[0]}&event_time=lte.${new Date(now.getTime() + 15 * 60000).toTimeString().split(' ')[0]}&select=*`;
+    const calUrl = `${SUPABASE_URL}/rest/v1/calendar_events?${filter}&select=*`;
     
     const response = await fetch(calUrl, {
       headers: {
@@ -37,14 +51,19 @@ async function handleSentinelCheck(env) {
     });
 
     const events = await response.json();
+    let routedCount = 0;
 
-    if (events && events.length > 0) {
+    if (Array.isArray(events)) {
+      routedCount = events.length;
       for (const event of events) {
         await notifyNeuralCore(event, env);
       }
+    } else {
+      console.error("[Sentinel Edge] Postgrest returned non-array response:", events);
+      return new Response(`Sentinel Scan Error: ${JSON.stringify(events)}`, { status: 500 });
     }
 
-    return new Response(`Sentinel Scan Complete: ${events.length} events routed.`, { status: 200 });
+    return new Response(`Sentinel Scan Complete: ${routedCount} events routed.`, { status: 200 });
   } catch (err) {
     console.error(`[Sentinel Edge] Scan Fail: ${err}`);
     return new Response("Scan Fail", { status: 500 });

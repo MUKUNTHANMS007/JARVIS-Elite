@@ -1,4 +1,5 @@
-import os
+import urllib.parse
+import webbrowser
 
 def send_whatsapp(number: str, message: str) -> str:
     """
@@ -10,11 +11,13 @@ def send_whatsapp(number: str, message: str) -> str:
         # Ensure number starts with + or just digits
         clean_number = "".join(filter(str.isdigit, number))
         
-        # URI encode message (basic)
-        safe_message = message.replace(" ", "%20")
+        # Safe URL encoding of the message parameter
+        safe_message = urllib.parse.quote(message)
         
         uri = f"whatsapp://send?phone={clean_number}&text={safe_message}"
-        os.system(f"start {uri}")
+        
+        # Open URI safely using webbrowser standard module (uses ShellExecute under the hood on Windows)
+        webbrowser.open(uri)
         
         return f"Successfully commanded Windows to initiate a WhatsApp message to {number} with the content: '{message}'."
     except Exception as e:

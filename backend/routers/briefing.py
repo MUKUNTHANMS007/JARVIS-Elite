@@ -1,3 +1,4 @@
+import asyncio
 from fastapi import APIRouter
 import os
 from services.mock_services import get_unread_count, get_notification_count, get_update_count
@@ -12,9 +13,9 @@ router = APIRouter()
 
 @router.get("/inbox/count")
 async def inbox_count():
-    gmail   = get_real_gmail_count()
+    gmail   = await asyncio.to_thread(get_real_gmail_count)
     github  = await get_notification_count()
-    leetcode = get_leetcode_stats()
+    leetcode = await get_leetcode_stats()
     
     total = gmail + github + (leetcode.get('total_solved', 0) if isinstance(leetcode, dict) else 0)
 

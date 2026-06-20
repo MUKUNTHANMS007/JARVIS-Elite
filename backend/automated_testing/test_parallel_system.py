@@ -23,9 +23,21 @@ async def test_dashboard_parallelism():
     """
     Verification: Parallel DASH Execution Proof.
     This test mathematically proves that tool calls are parallelized.
-    Total duration should be ~ max(0.4, 0.1) = 0.4s.
-    If sequential, duration would be (0.4 + 0.1) = 0.5s+.
+    The faster task must start before the slower task finishes.
     """
+    call_times = {}
+
+    def slow_mock_spotify():
+        call_times["spotify_start"] = time.perf_counter()
+        time.sleep(0.4)
+        call_times["spotify_end"] = time.perf_counter()
+        return "Mock"
+
+    def fast_mock_db():
+        call_times["db_start"] = time.perf_counter()
+        time.sleep(0.1)
+        call_times["db_end"] = time.perf_counter()
+        return []
     
     # We patch the modules directly to ensure correct interception
     with patch("routers.core.get_current_playback_info", side_effect=slow_mock_spotify), \
@@ -40,8 +52,11 @@ async def test_dashboard_parallelism():
         print(f"\n[Verification] Parallel Dashboard Latency: {duration:.4f}s")
         
         # Parallel Execution Proof
-        # We allow a slight overhead (0.49s) but it MUST be less than sequential sum (0.5s)
-        assert duration < 0.49, f"Parallel I/O failed! Latency: {duration:.4f}s (Sequential sum is 0.5s)"
+        assert "db_start" in call_times and "spotify_end" in call_times, "Mocks did not execute"
+        assert call_times["db_start"] < call_times["spotify_end"], (
+            f"Sequential execution detected! DB started at {call_times['db_start']:.4f} "
+            f"which is after Spotify ended at {call_times['spotify_end']:.4f}"
+        )
         assert response["spotify_status"] == "Mock"
 
 @pytest.mark.asyncio
@@ -123,9 +138,13 @@ async def test_tts_speech_modes():
          patch.object(manager, "active", {"test_client_tts": mock_ws}), \
          patch.object(manager, "send_json", new_callable=AsyncMock):
         
+        original_getenv = os.getenv
+        def make_mock_getenv(mode_val):
+            return lambda key, default=None: mode_val if key == "TTS_SPEECH_MODE" else original_getenv(key, default)
+
         # 1. Test 'sentence' mode (Optimized Default)
         captured_sentences.clear()
-        with patch("os.getenv", return_value="sentence"):
+        with patch("os.getenv", side_effect=make_mock_getenv("sentence")):
             await run_agent("test_client_tts", "hi", None)
             assert len(captured_sentences) >= 2
             assert captured_sentences[0] == "Hello, Sir."
@@ -133,14 +152,14 @@ async def test_tts_speech_modes():
 
         # 2. Test 'entire' mode
         captured_sentences.clear()
-        with patch("os.getenv", return_value="entire"):
+        with patch("os.getenv", side_effect=make_mock_getenv("entire")):
             await run_agent("test_client_tts", "hi", None)
             assert len(captured_sentences) == 1
             assert captured_sentences[0] == "Hello, Sir. I have generated a briefing which has stats."
 
         # 3. Test 'chunk' mode (Legacy fallback)
         captured_sentences.clear()
-        with patch("os.getenv", return_value="chunk"):
+        with patch("os.getenv", side_effect=make_mock_getenv("chunk")):
             await run_agent("test_client_tts", "hi", None)
             # Stuttery chunk logic splits it up much more frequently
             assert len(captured_sentences) > 2

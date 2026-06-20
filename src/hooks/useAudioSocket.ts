@@ -86,6 +86,10 @@ export function useAudioSocket(url: string): UseJarvisSocketReturn {
     ws.current = socket;
 
     socket.onopen = async () => {
+      if (ws.current !== socket) {
+        socket.close();
+        return;
+      }
       setIsConnected(true);
       retryCount.current = 0;
       console.log("[Jarvis] Neural link established.");
@@ -99,8 +103,18 @@ export function useAudioSocket(url: string): UseJarvisSocketReturn {
     };
 
     socket.onmessage = async (event) => {
+      if (ws.current !== socket) {
+        socket.close();
+        return;
+      }
       if (typeof event.data === 'string') {
-        const msg = JSON.parse(event.data);
+        let msg: { type?: MessageType; [key: string]: any };
+        try {
+          msg = JSON.parse(event.data);
+        } catch (error) {
+          console.warn("[Jarvis] Ignoring malformed WebSocket message:", error);
+          return;
+        }
 
         switch (msg.type as MessageType) {
           case "PING":
@@ -155,26 +169,40 @@ export function useAudioSocket(url: string): UseJarvisSocketReturn {
         }
       } else {
         if (event.data instanceof ArrayBuffer && event.data.byteLength > 0) {
-          audioReceivedThisTurn.current = true;
-          await playRawChunk(event.data);
+          const played = await playRawChunk(event.data);
+          audioReceivedThisTurn.current = audioReceivedThisTurn.current || played;
         }
       }
     };
 
     socket.onclose = (e) => {
-      setIsConnected(false);
-      clearInterval(pingTimer.current);
-      console.warn(`[Jarvis] Disconnected. Code: ${e.code}`);
+      if (ws.current === socket) {
+        setIsConnected(false);
+        clearInterval(pingTimer.current);
+        console.warn(`[Jarvis] Disconnected. Code: ${e.code}`);
 
-      if (shouldReconnect.current && retryCount.current < MAX_RETRIES) {
-        const delay = Math.min(1000 * 2 ** retryCount.current, 30000);
-        retryCount.current++;
-        console.log(`[Jarvis] Reconnecting in ${delay}ms (attempt ${retryCount.current})`);
-        retryTimer.current = window.setTimeout(connect, delay);
+        if (e.code === 4401) {
+          console.error("[Jarvis] Connection rejected: Unauthorized (Code 4401). Please verify that VITE_WS_AUTH_TOKEN in your frontend matches WS_AUTH_TOKEN on your backend.");
+          shouldReconnect.current = false;
+          return;
+        }
+
+        if (shouldReconnect.current && retryCount.current < MAX_RETRIES) {
+          const delay = Math.min(1000 * 2 ** retryCount.current, 30000);
+          retryCount.current++;
+          console.log(`[Jarvis] Reconnecting in ${delay}ms (attempt ${retryCount.current})`);
+          retryTimer.current = window.setTimeout(connect, delay);
+        }
+      } else {
+        console.log("[Jarvis] Stale socket onclose ignored.");
       }
     };
 
-    socket.onerror = () => socket.close();
+    // P2 fix: log URL and full event object so voice socket failures are diagnosable.
+    socket.onerror = (event) => {
+      console.error(`[Jarvis] Voice socket error (url=${url}):`, event);
+      socket.close();
+    };
   }, [url, playRawChunk, speakWithBrowserTTS]);
 
   const startRecording = useCallback(async (imageFrame: string | null = null) => {
@@ -256,9 +284,19 @@ export function useAudioSocket(url: string): UseJarvisSocketReturn {
   }, []);
 
   const sendTextMessage = useCallback(async (text: string, image: string | null = null) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
     await initAudio();
-    if (!ws.current || ws.current.readyState !== WebSocket.OPEN) return;
-    ws.current.send(JSON.stringify({ type: "text_input", text, image }));
+    if (!ws.current || ws.current.readyState !== WebSocket.OPEN) {
+      console.warn("[Jarvis] Cannot send message while neural link is offline.");
+      return;
+    }
+    setMessages(prev => [...prev, {
+      role: "user",
+      content: trimmed,
+      timestamp: Date.now()
+    }]);
+    ws.current.send(JSON.stringify({ type: "text_input", text: trimmed, image }));
   }, [initAudio]);
 
   const reconnect = useCallback(() => {

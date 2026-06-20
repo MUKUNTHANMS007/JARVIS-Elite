@@ -32,6 +32,8 @@ from routers.calendar import router as calendar_router
 from routers.core import router as core_router
 from routers.evolution import router as evolution_router
 from routers.voice import router as voice_router
+from routers.tts import router as tts_router
+from routers.schedule import router as schedule_router
 from ws_neural import router as neural_ws_router
 from ws_hub import router as hub_ws_router
 from services.core_service import get_academic_radar, get_today_focus
@@ -133,15 +135,20 @@ async def refresh_intelligence_hub():
                     if event.get("event_date") == today_str:
                         e_time = event.get("event_time")
                         if e_time:
-                            ev_dt = datetime.strptime(f"{today_str} {e_time}", "%Y-%m-%d %H:%M:%S")
-                            diff = (ev_dt.timestamp() - now) / 60
-                            if 0 < diff <= 15:
-                                current_triggers = get_intelligence().get("proactive_triggers", {})
-                                if event.get("title") not in current_triggers:
-                                    current_triggers[event.get("title")] = {
-                                        "type": "MEETING_ALERT", "title": event.get("title"), "diff": round(diff), "timestamp": now
-                                    }
-                                    update_intelligence("proactive_triggers", current_triggers)
+                            # Support range strings like "10:30:00 - 11:30:00"
+                            start_time_part = e_time.split(" - ")[0].strip()
+                            try:
+                                ev_dt = datetime.strptime(f"{today_str} {start_time_part}", "%Y-%m-%d %H:%M:%S")
+                                diff = (ev_dt.timestamp() - now) / 60
+                                if 0 < diff <= 15:
+                                    current_triggers = get_intelligence().get("proactive_triggers", {})
+                                    if event.get("title") not in current_triggers:
+                                        current_triggers[event.get("title")] = {
+                                            "type": "MEETING_ALERT", "title": event.get("title"), "diff": round(diff), "timestamp": now
+                                        }
+                                        update_intelligence("proactive_triggers", current_triggers)
+                            except ValueError:
+                                logger.debug(f"[Neural Hub] Failed to parse event time string: {e_time}")
             except Exception as e:
                 logger.debug(f"[Neural Hub] Calendar sync drift: {e}")
             await asyncio.sleep(60)
@@ -216,6 +223,10 @@ async def lifespan(app: FastAPI):
     logger.info("[Neural Core] Shutting down.")
 
 app = FastAPI(title="JARVIS Neural Core", lifespan=lifespan)
+
+from fastapi.staticfiles import StaticFiles
+from voice.tts_engine.config import TTS_CACHE_DIR
+app.mount("/static/tts", StaticFiles(directory=str(TTS_CACHE_DIR)), name="tts_cache")
 # app.add_middleware(GZipMiddleware, minimum_size=1000) # Disabled for binary WS stability
 
 # --- NEURAL FIREWALL: Trusted Host Filtering (Broadened for Loopback Stability) ---
@@ -256,6 +267,8 @@ app.include_router(calendar_router, prefix="/api/calendar")
 app.include_router(core_router, prefix="/api/routine")
 app.include_router(evolution_router, prefix="/api/evolution")
 app.include_router(voice_router, prefix="/api/voice")
+app.include_router(tts_router, prefix="/api/tts")
+app.include_router(schedule_router, prefix="/api/schedule")
 
 def _system_status_snapshot(hub: dict) -> dict:
     """Builds a compact system status object for initial sync/UI."""
@@ -292,6 +305,14 @@ async def sync():
     return {"intelligence": hub, "system": system, "focus": focus}
 
 # --- NEURAL EDGE: Proactive Sentinel Receiver ---
+# Validate the secret is set at module load time — fail closed if missing.
+_NEURAL_EDGE_SECRET = os.environ.get("NEURAL_EDGE_SECRET")
+if not _NEURAL_EDGE_SECRET:
+    raise RuntimeError(
+        "[Neural Edge] NEURAL_EDGE_SECRET environment variable is not set. "
+        "Add it to your .env file. Server will not start without it."
+    )
+
 @app.post("/api/neural/edge-trigger")
 async def edge_trigger(request: Request):
     """
@@ -300,10 +321,9 @@ async def edge_trigger(request: Request):
     """
     signature = request.headers.get("X-Neural-Signature")
     payload = await request.body()
-    secret = os.getenv("NEURAL_EDGE_SECRET", "J_SENTINEL_SECURE_2026")
 
-    # --- SIGNATURE VERIFICATION ---
-    expected_mac = hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
+    # --- SIGNATURE VERIFICATION (uses module-level validated secret) ---
+    expected_mac = hmac.new(_NEURAL_EDGE_SECRET.encode(), payload, hashlib.sha256).hexdigest()
     if not signature or not hmac.compare_digest(signature, expected_mac):
         logger.warning(f"[Neural Edge] Trigger Denied: Invalid signature from {request.client.host}")
         return Response(status_code=403)

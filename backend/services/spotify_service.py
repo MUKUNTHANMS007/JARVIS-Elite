@@ -6,7 +6,7 @@ def get_spotify_client():
     return spotipy.Spotify(auth_manager=SpotifyOAuth(
         client_id=os.getenv("SPOTIFY_CLIENT_ID", ""),
         client_secret=os.getenv("SPOTIFY_CLIENT_SECRET", ""),
-        redirect_uri=os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:9000/callback"),
+        redirect_uri=os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:9091/callback"),
         scope="user-read-playback-state user-modify-playback-state"
     ))
 

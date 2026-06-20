@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   StyleSheet, Text, View, TouchableOpacity, 
-  Dimensions, Animated, StatusBar, ScrollView 
+  Dimensions, Animated, StatusBar, ScrollView,
+  Modal, TextInput, Alert
 } from 'react-native';
 import { Audio } from 'expo-av';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Notifications from 'expo-notifications';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { 
   Mic, MicOff, Zap, Code, 
   BookOpen, Activity, Settings, 
@@ -13,11 +15,6 @@ import {
 } from 'lucide-react-native';
 
 const { width } = Dimensions.get('window');
-
-// --- CONFIG ---
-const BACKEND_HOST = "192.168.1.5:8000"; // Replace with your laptop IP
-const BACKEND_WS_URL = `ws://${BACKEND_HOST}/ws/voice`;
-const BACKEND_HTTP_URL = `http://${BACKEND_HOST}`;
 const VAD_THRESHOLD = -45; // dB
 const SILENCE_DURATION = 800; // ms
 
@@ -28,12 +25,36 @@ export default function App() {
   const [lastTranscript, setLastTranscript] = useState("Standing by...");
   const [lastAssistantText, setLastAssistantText] = useState("");
   
+  // Configuration & Dynamic Telemetry States
+  const [backendHost, setBackendHost] = useState("192.168.1.5:8000");
+  const [hostInput, setHostInput] = useState("192.168.1.5:8000");
+  const [showSettings, setShowSettings] = useState(false);
+
+  // Live Telemetry States
+  const [leetcodeStreak, setLeetcodeStreak] = useState(12);
+  const [leetcodeSolved, setLeetcodeSolved] = useState(250);
+  const [examDay, setExamDay] = useState("Day 12");
+  const [examName, setExamName] = useState("OS Concepts");
+  const [focusHours, setFocusHours] = useState(4.2);
+  const [spotifyTrack, setSpotifyTrack] = useState("Lo-Fi Beats");
+  const [spotifyStatus, setSpotifyStatus] = useState("Now Playing");
+  
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const socketRef = useRef<WebSocket | null>(null);
   const recordingRef = useRef<Audio.Recording | null>(null);
   const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const assistantTextRef = useRef("");
   const soundRef = useRef<Audio.Sound | null>(null);
+
+  // --- Load backend config ---
+  useEffect(() => {
+    AsyncStorage.getItem("BACKEND_HOST").then((val) => {
+      if (val) {
+        setBackendHost(val);
+        setHostInput(val);
+      }
+    });
+  }, []);
 
   // --- Neural Pulse Animation ---
   useEffect(() => {
@@ -73,7 +94,7 @@ export default function App() {
         soundRef.current = null;
       }
 
-      const response = await fetch(`${BACKEND_HTTP_URL}/api/voice/speak`, {
+      const response = await fetch(`http://${backendHost}/api/voice/speak`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text }),
@@ -114,44 +135,103 @@ export default function App() {
       socketRef.current?.close();
       soundRef.current?.unloadAsync().catch(() => {});
     };
-  }, []);
+  }, [backendHost]);
 
   const connectWS = () => {
-    const ws = new WebSocket(BACKEND_WS_URL);
+    if (socketRef.current) {
+      socketRef.current.close();
+    }
+    const wsUrl = `ws://${backendHost}/ws/voice`;
+    const ws = new WebSocket(wsUrl);
     ws.onopen = () => setIsConnected(true);
     ws.onclose = () => {
       setIsConnected(false);
-      setTimeout(connectWS, 3000);
+      if (socketRef.current === ws) {
+        setTimeout(connectWS, 3000);
+      }
     };
     ws.onmessage = (e) => {
       if (typeof e.data !== 'string') return;
 
-      const data = JSON.parse(e.data);
-      if (data.type === 'TRANSCRIPTION') setLastTranscript(data.text);
-      if (data.type === 'TURN_START') {
-        setIsThinking(true);
-        assistantTextRef.current = "";
-        setLastAssistantText("");
-      }
-      if (data.type === 'TEXT_CHUNK') {
-        assistantTextRef.current += data.text || "";
-        setLastAssistantText(assistantTextRef.current);
-      }
-      if (data.type === 'TURN_COMPLETE') {
-        setIsThinking(false);
-        const finalText = assistantTextRef.current.trim();
-        if (finalText) {
-          speakAssistantText(finalText);
+      try {
+        const data = JSON.parse(e.data);
+        if (data.type === 'TRANSCRIPTION') setLastTranscript(data.text);
+        if (data.type === 'TURN_START') {
+          setIsThinking(true);
+          assistantTextRef.current = "";
+          setLastAssistantText("");
         }
+        if (data.type === 'TEXT_CHUNK') {
+          assistantTextRef.current += data.text || "";
+          setLastAssistantText(assistantTextRef.current);
+        }
+        if (data.type === 'TURN_COMPLETE') {
+          setIsThinking(false);
+          const finalText = assistantTextRef.current.trim();
+          if (finalText) {
+            speakAssistantText(finalText);
+          }
+        }
+      } catch (err) {
+        console.error("[WS] Message parsing failed:", err);
       }
     };
     socketRef.current = ws;
   };
 
+  // --- Live Sync Telemetry ---
+  const fetchSyncData = async () => {
+    try {
+      const res = await fetch(`http://${backendHost}/api/sync`);
+      if (res.ok) {
+        const data = await res.json();
+        const intel = data.intelligence || {};
+        const leetcode = intel.leetcode || {};
+        if (leetcode.streak !== undefined) setLeetcodeStreak(leetcode.streak);
+        if (leetcode.total_solved !== undefined) setLeetcodeSolved(leetcode.total_solved);
+        
+        if (data.focus?.deep_work_hours !== undefined) {
+          setFocusHours(data.focus.deep_work_hours);
+        }
+        
+        const track = intel.spotify_track;
+        if (track) {
+          setSpotifyTrack(track);
+          if (track === "Inactive" || track === "Standby") {
+            setSpotifyStatus("Paused");
+          } else if (track === "Premium Required") {
+            setSpotifyStatus("Restricted");
+          } else {
+            setSpotifyStatus("Now Playing");
+          }
+        }
+
+        const radar = intel.academic_radar || [];
+        if (radar.length > 0) {
+          setExamDay(`Day ${radar[0].date}`);
+          setExamName(radar[0].title);
+        }
+      }
+    } catch (error) {
+      console.debug("Failed to sync backend telemetry:", error);
+    }
+  };
+
+  useEffect(() => {
+    fetchSyncData();
+    const timer = setInterval(fetchSyncData, 10000);
+    return () => clearInterval(timer);
+  }, [backendHost]);
+
   // --- Voice Pipeline with VAD ---
   const startRecording = async () => {
     try {
-      await Audio.requestPermissionsAsync();
+      const permission = await Audio.requestPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert("Permission Required", "Microphone access is required to speak with JARVIS.");
+        return;
+      }
+
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: true,
         playsInSilentModeIOS: true,
@@ -167,17 +247,14 @@ export default function App() {
       recordingRef.current = recording;
       setIsRecording(true);
 
-      // Simple VAD Logic
       recording.setOnRecordingStatusUpdate((status) => {
         if (status.metering !== undefined) {
           if (status.metering > VAD_THRESHOLD) {
-            // Speech detected - reset silence timer
             if (silenceTimerRef.current) {
               clearTimeout(silenceTimerRef.current);
               silenceTimerRef.current = null;
             }
           } else {
-            // Silence detected - start timer if not already running
             if (!silenceTimerRef.current) {
               silenceTimerRef.current = setTimeout(stopRecording, SILENCE_DURATION);
             }
@@ -187,6 +264,7 @@ export default function App() {
 
     } catch (err) {
       console.error('Failed to start recording', err);
+      Alert.alert("Recording Failed", `Microphone error: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
@@ -196,25 +274,39 @@ export default function App() {
     setIsRecording(false);
     if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
 
-    await recordingRef.current.stopAndUnloadAsync();
-    const uri = recordingRef.current.getURI();
-    recordingRef.current = null;
+    try {
+      await recordingRef.current.stopAndUnloadAsync();
+      const uri = recordingRef.current.getURI();
+      recordingRef.current = null;
 
-    if (uri && socketRef.current?.readyState === WebSocket.OPEN) {
-      // Send audio to backend
-      const response = await fetch(uri);
-      const blob = await response.blob();
-      const reader = new FileReader();
-      reader.onload = () => {
-        const base64Audio = (reader.result as string).split(',')[1];
-        socketRef.current?.send(JSON.stringify({
-          type: 'audio_input',
-          data: base64Audio,
-          mime_type: blob.type || 'audio/mp4',
-          file_name: 'mobile-recording.m4a',
-        }));
-      };
-      reader.readAsDataURL(blob);
+      if (uri && socketRef.current?.readyState === WebSocket.OPEN) {
+        const response = await fetch(uri);
+        const blob = await response.blob();
+        const reader = new FileReader();
+        reader.onload = () => {
+          const base64Audio = (reader.result as string).split(',')[1];
+          socketRef.current?.send(JSON.stringify({
+            type: 'audio_input',
+            data: base64Audio,
+            mime_type: blob.type || 'audio/mp4',
+            file_name: 'mobile-recording.m4a',
+          }));
+        };
+        reader.readAsDataURL(blob);
+      }
+    } catch (err) {
+      console.error("Failed to stop recording", err);
+    }
+  };
+
+  const handleSaveSettings = async () => {
+    try {
+      await AsyncStorage.setItem("BACKEND_HOST", hostInput);
+      setBackendHost(hostInput);
+      setShowSettings(false);
+      Alert.alert("Settings Updated", `Core host set to ${hostInput}`);
+    } catch (e) {
+      Alert.alert("Error", "Failed to save settings to storage.");
     }
   };
 
@@ -228,7 +320,7 @@ export default function App() {
           <Text style={styles.greeting}>Good Morning,</Text>
           <Text style={styles.userName}>Mukunthan</Text>
         </View>
-        <TouchableOpacity style={styles.settingsBtn}>
+        <TouchableOpacity style={styles.settingsBtn} onPress={() => setShowSettings(true)}>
           <Settings size={20} color="#fff" />
         </TouchableOpacity>
       </View>
@@ -254,14 +346,14 @@ export default function App() {
           <View style={[styles.card, { flex: 1.5, backgroundColor: '#121212' }]}>
             <Code size={24} color="#00d2ff" />
             <Text style={styles.cardTitle}>LeetCode</Text>
-            <Text style={styles.cardVal}>12 Day Streak</Text>
-            <Text style={styles.cardSub}>250 Solved</Text>
+            <Text style={styles.cardVal}>{leetcodeStreak} Day Streak</Text>
+            <Text style={styles.cardSub}>{leetcodeSolved} Solved</Text>
           </View>
           <View style={[styles.card, { flex: 1, backgroundColor: '#1a1a1a' }]}>
             <BookOpen size={24} color="#a855f7" />
             <Text style={styles.cardTitle}>Exams</Text>
-            <Text style={styles.cardVal}>Day 12</Text>
-            <Text style={styles.cardSub}>OS Concepts</Text>
+            <Text style={styles.cardVal}>{examDay}</Text>
+            <Text style={styles.cardSub}>{examName}</Text>
           </View>
         </View>
 
@@ -269,14 +361,14 @@ export default function App() {
           <View style={[styles.card, { flex: 1, backgroundColor: '#1a1a1a' }]}>
             <Activity size={24} color="#22c55e" />
             <Text style={styles.cardTitle}>Focus</Text>
-            <Text style={styles.cardVal}>4.2h</Text>
+            <Text style={styles.cardVal}>{focusHours}h</Text>
             <Text style={styles.cardSub}>Deep Work</Text>
           </View>
           <View style={[styles.card, { flex: 1.5, backgroundColor: '#121212' }]}>
             <Music size={24} color="#ec4899" />
             <Text style={styles.cardTitle}>Spotify</Text>
-            <Text style={styles.cardVal}>Now Playing</Text>
-            <Text style={styles.cardSub}>Lo-Fi Beats</Text>
+            <Text style={styles.cardVal}>{spotifyStatus}</Text>
+            <Text style={styles.cardSub}>{spotifyTrack}</Text>
           </View>
         </View>
 
@@ -285,6 +377,47 @@ export default function App() {
           <Text style={styles.fullCardText}>View Discussion History</Text>
         </TouchableOpacity>
       </ScrollView>
+
+      {/* Settings Modal */}
+      <Modal
+        visible={showSettings}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowSettings(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContainer}>
+            <Text style={styles.modalTitle}>JARVIS COGNITIVE HOST</Text>
+            <Text style={styles.modalLabel}>Enter core server IP / Host:</Text>
+            <TextInput
+              style={styles.modalInput}
+              value={hostInput}
+              onChangeText={setHostInput}
+              placeholder="192.168.1.5:8000"
+              placeholderTextColor="#666"
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <View style={styles.modalActions}>
+              <TouchableOpacity 
+                style={[styles.modalBtn, styles.cancelBtn]} 
+                onPress={() => {
+                  setHostInput(backendHost);
+                  setShowSettings(false);
+                }}
+              >
+                <Text style={styles.btnText}>CANCEL</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[styles.modalBtn, styles.saveBtn]} 
+                onPress={handleSaveSettings}
+              >
+                <Text style={[styles.btnText, { color: '#000', fontWeight: 'bold' }]}>SAVE HOST</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -411,5 +544,67 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 14,
     fontWeight: '600',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.85)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContainer: {
+    width: width * 0.85,
+    backgroundColor: '#111',
+    borderRadius: 28,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: '#333',
+  },
+  modalTitle: {
+    color: '#00d2ff',
+    fontSize: 16,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    letterSpacing: 1.5,
+    marginBottom: 20,
+  },
+  modalLabel: {
+    color: '#aaa',
+    fontSize: 12,
+    marginBottom: 8,
+  },
+  modalInput: {
+    backgroundColor: '#222',
+    color: '#fff',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    fontSize: 14,
+    borderWidth: 1,
+    borderColor: '#444',
+    marginBottom: 24,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  modalBtn: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  cancelBtn: {
+    backgroundColor: '#1a1a1a',
+    borderWidth: 1,
+    borderColor: '#333',
+  },
+  saveBtn: {
+    backgroundColor: '#00d2ff',
+  },
+  btnText: {
+    fontSize: 12,
+    letterSpacing: 1,
+    color: '#fff',
   },
 });

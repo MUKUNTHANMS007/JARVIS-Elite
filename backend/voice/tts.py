@@ -129,8 +129,13 @@ def _wav_to_float32(wav_bytes: bytes) -> np.ndarray | None:
         return None
 
 def clean_text(text: str) -> str:
-    """Strip markdown and normalize whitespace."""
-    text = re.sub(r'(\*\*|\*|#|`|\[|\]|<[^>]+>)', '', text)
+    """Strip markdown and normalize whitespace.
+    Preserves inline # (e.g. C#, hashtags) — only strips leading # heading markers.
+    """
+    # Remove markdown heading markers (# only at line start)
+    text = re.sub(r'^#+\s*', '', text, flags=re.MULTILINE)
+    # Remove other markdown formatting
+    text = re.sub(r'(\*\*|\*|`|\[|\]|<[^>]+>)', '', text)
     return re.sub(r'\s+', ' ', text).strip()
 
 def chunk_text(text: str, max_chars: int = 180) -> list[str]:
@@ -197,13 +202,14 @@ async def synthesize_speech_stream(text: str) -> AsyncGenerator[bytes, None]:
         audio_bytes: bytes | None = None
         wav_bytes: bytes | None = None
 
+        # Per-chunk Groq attempt: do NOT disable Groq session-wide after one
+        # transient error — only skip it for this individual chunk.
         if groq_available:
             wav_bytes = await _synthesize_groq(chunk)
             if wav_bytes:
                 audio_bytes = _wav_to_pcm(wav_bytes)
                 used_groq = True
-            else:
-                groq_available = False
+            # groq_available stays True — next chunk will try Groq again
 
         if not audio_bytes:
             audio_bytes = await _synthesize_edge(chunk)

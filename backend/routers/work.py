@@ -2,7 +2,7 @@ from fastapi import APIRouter
 import os
 import psutil
 from github import Github
-from datetime import datetime
+from datetime import datetime, timezone
 
 router = APIRouter()
 
@@ -45,7 +45,7 @@ async def github_activity():
 
             # Calculate "time ago" (simplified)
             created_at = event.created_at
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             diff = now - created_at
             if diff.days > 0:
                 time_str = f"{diff.days}d ago"

@@ -25,10 +25,30 @@ export function HistoryPage() {
   );
 
   // Group by relative date
+  const todayStr = new Date().toDateString();
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayStr = yesterday.toDateString();
+
+  const todayItems: Message[] = [];
+  const yesterdayItems: Message[] = [];
+  const archiveItems: Message[] = [];
+
+  filteredHistory.forEach(m => {
+    const msgDate = new Date(m.timestamp).toDateString();
+    if (msgDate === todayStr) {
+      todayItems.push(m);
+    } else if (msgDate === yesterdayStr) {
+      yesterdayItems.push(m);
+    } else {
+      archiveItems.push(m);
+    }
+  });
+
   const groups = [
-    { label: 'Today', items: filteredHistory.slice(0, 5) },
-    { label: 'Yesterday', items: filteredHistory.slice(5, 10) },
-    { label: 'Recent Archive', items: filteredHistory.slice(10, 30) }
+    { label: 'Today', items: todayItems },
+    { label: 'Yesterday', items: yesterdayItems },
+    { label: 'Recent Archive', items: archiveItems }
   ];
 
   return (

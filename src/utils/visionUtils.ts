@@ -8,6 +8,11 @@ export const captureFrame = (videoElement: HTMLVideoElement | null): string | nu
         return null;
     }
 
+    if (videoElement.videoWidth === 0 || videoElement.videoHeight === 0) {
+        console.warn("[Jarvis Core] Video dimensions are zero. Stream might not be initialized.");
+        return null;
+    }
+
     // Neural Proximity Scaling: Maximize speed by capping resolution at 1024px
     const MAX_DIMENSION = 1024;
     let width = videoElement.videoWidth;

@@ -19,12 +19,14 @@ async def manage_calendar(action: str, title: str = None, date: str = None, time
             
             # --- DATE NORMALIZATION LAYER ---
             # Handles relative dates: 'today', 'tomorrow'
+            # Use word-split matching to avoid "day after tomorrow" matching "tomorrow".
             normalized_date = date.lower().strip()
+            date_words = normalized_date.split()
             today_obj = datetime.now()
-            
-            if "today" in normalized_date:
+
+            if "today" in date_words:
                 date = today_obj.strftime("%Y-%m-%d")
-            elif "tomorrow" in normalized_date:
+            elif date_words == ["tomorrow"] or normalized_date == "tomorrow":
                 date = (today_obj + timedelta(days=1)).strftime("%Y-%m-%d")
             # --- END NORMALIZATION ---
             
@@ -46,10 +48,14 @@ async def manage_calendar(action: str, title: str = None, date: str = None, time
             events = intelligence.get("calendar", [])
             
             if not events:
-                # Fallback to DB only if cache is empty AND we haven't synced ever
-                if intelligence.get("status") == "initializing":
+                # Cache empty: attempt live DB fetch before claiming the calendar is clear.
+                # This avoids falsely reporting "no events" when the cache just hasn't
+                # synced yet or when Supabase was temporarily unavailable.
+                try:
                     events = await get_calendar_events_db(user_id)
-                else:
+                except Exception:
+                    return "Sir, I was unable to reach Neural Memory right now. Please try again in a moment."
+                if not events:
                     return "Your calendar is currently clear, Sir. Operative efficiency is at 100%."
             
             output = "Your Upcoming Schedule, Sir:\n"

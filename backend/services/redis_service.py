@@ -14,9 +14,24 @@ class RedisCache:
         port = int(os.getenv("REDIS_PORT", 6379))
         password = os.getenv("REDIS_PASSWORD", None)
         
-        # --- NEURAL SHIELD: Private Network Enforcement ---
-        is_private = host == "127.0.0.1" or host == "localhost" or host.startswith("192.168.") or host.startswith("10.") or host.startswith("172.")
-        if not is_private:
+        # --- NEURAL SHIELD: Private Network Enforcement (RFC1918 only) ---
+        def _is_private(h: str) -> bool:
+            if h in ("127.0.0.1", "localhost"):
+                return True
+            if h.startswith("192.168.") or h.startswith("10."):
+                return True
+            # RFC1918: 172.16.0.0 – 172.31.255.255 only
+            if h.startswith("172."):
+                parts = h.split(".")
+                if len(parts) >= 2:
+                    try:
+                        second = int(parts[1])
+                        return 16 <= second <= 31
+                    except ValueError:
+                        pass
+            return False
+
+        if not _is_private(host):
             print("[Neural Shield] BLOCK: Attempted connection to non-private Redis host. Isolation enforced.")
             self.client = None
             return
