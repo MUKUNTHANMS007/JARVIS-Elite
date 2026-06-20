@@ -59,6 +59,14 @@ export function useAudioSocket(url: string): UseJarvisSocketReturn {
 
   const { isSpeaking, playRawChunk, initAudio } = useJarvisAudio();
 
+  // Serialize binary audio chunk handling. WebSocket.onmessage fires in
+  // arrival order, but since the handler is async, a slow chunk (e.g. an
+  // MP3 fallback chunk going through decodeAudioData) can resolve AFTER a
+  // later, faster PCM chunk - causing audio to be posted to the worklet
+  // out of order (garbled/stuttering playback). This chain guarantees
+  // strictly in-order processing no matter how long each chunk takes.
+  const audioChainRef = useRef<Promise<void>>(Promise.resolve());
+
   const MAX_RETRIES = 8;
 
   const blobToBase64 = useCallback((blob: Blob) => {
@@ -134,6 +142,8 @@ export function useAudioSocket(url: string): UseJarvisSocketReturn {
             if (msg.mood) setMood(msg.mood);
             currentAssistantMsg.current = "";
             audioReceivedThisTurn.current = false;
+            // Drop any chunks still draining from a previous (interrupted) turn.
+            audioChainRef.current = Promise.resolve();
             break;
 
           case "TEXT_CHUNK":
@@ -169,8 +179,18 @@ export function useAudioSocket(url: string): UseJarvisSocketReturn {
         }
       } else {
         if (event.data instanceof ArrayBuffer && event.data.byteLength > 0) {
-          const played = await playRawChunk(event.data);
-          audioReceivedThisTurn.current = audioReceivedThisTurn.current || played;
+          const buffer = event.data;
+          // Chain onto the previous chunk's promise so chunks are always
+          // played in the order they arrived, even if an earlier chunk's
+          // decode (e.g. MP3 fallback) takes longer than a later one's.
+          audioChainRef.current = audioChainRef.current
+            .then(async () => {
+              const played = await playRawChunk(buffer);
+              audioReceivedThisTurn.current = audioReceivedThisTurn.current || played;
+            })
+            .catch((error) => {
+              console.warn("[Jarvis] Audio chunk playback failed:", error);
+            });
         }
       }
     };
