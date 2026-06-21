@@ -1,7 +1,7 @@
 import os, sys, json, re, asyncio, logging
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from typing import AsyncGenerator
-from groq import Groq
+from groq import AsyncGroq
 from dotenv import load_dotenv
 from datetime import datetime
 import httpx
@@ -42,7 +42,7 @@ logger = logging.getLogger("NeuralCore")
 
 # Initialize Groq
 _groq_api_key = os.environ.get("GROQ_API_KEY")
-groq_client = Groq(api_key=_groq_api_key) if _groq_api_key else None
+groq_client = AsyncGroq(api_key=_groq_api_key) if _groq_api_key else None
 
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/")
 LOCAL_LLM_MODEL = os.environ.get("LOCAL_LLM_MODEL", "gemma4")
@@ -366,13 +366,13 @@ async def get_agent_response_stream(user_text: str, user_id: str = "JARVIS_ADMIN
                 if stream_buffer:
                     yield re.sub(r'<function=.*?>.*?</function>', '', stream_buffer, flags=re.DOTALL)
             else:
-                response = groq_client.chat.completions.create(
+                response = await groq_client.chat.completions.create(
                     model=model_to_use, messages=messages, tools=tools_for_turn,
                     tool_choice=tool_choice_for_turn, stream=True, max_tokens=500, temperature=0.7
                 )
 
                 stream_buffer = ""
-                for chunk in response:
+                async for chunk in response:
                     if not chunk.choices: continue
                     delta = chunk.choices[0].delta
                     

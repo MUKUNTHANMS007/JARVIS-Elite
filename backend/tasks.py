@@ -50,16 +50,16 @@ def proactive_sentinel_scan():
     # Placeholder for more complex sentinel logic
     return {"scan_time": datetime.utcnow().isoformat(), "status": "HEALTHY"}
 
-def _core_dispatch_logic(title: str, message: str, priority: int = 3):
+def _core_dispatch_logic(title: str, message: str, priority: int = 3, action_label: str = None, action_url: str = None):
     try:
-        res = send_neural_push(title, message, priority)
+        res = send_neural_push(title, message, priority, action_label, action_url)
         return {"status": "DISPATCHED", "response": res}
     except Exception as e:
         return {"status": "FAILED", "error": str(e)}
 
 @celery_app.task(name="tasks.send_dispatch_notification_task")
-def send_dispatch_notification_task(title: str, message: str, priority: int = 3):
-    return _core_dispatch_logic(title, message, priority)
+def send_dispatch_notification_task(title: str, message: str, priority: int = 3, action_label: str = None, action_url: str = None):
+    return _core_dispatch_logic(title, message, priority, action_label, action_url)
 
 def _core_vision_logic(image_base64: str, context_text: str = ""):
     try:

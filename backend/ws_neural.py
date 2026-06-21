@@ -176,6 +176,7 @@ async def run_agent(
     sentence_buffer = ""
     token_count = 0
     first_chunk = True
+    interrupted = False
 
     try:
         async for token in strip_function_tags_stream(get_agent_response_stream(text, image_base64=image)):
@@ -231,6 +232,7 @@ async def run_agent(
             await tts_queue.put(sentence_buffer.strip())
 
     except asyncio.CancelledError:
+        interrupted = True
         raise
     except Exception as exc:
         print(f"[Agent] Error for {client_id}: {exc}")
@@ -242,7 +244,11 @@ async def run_agent(
             pass
         ws = manager.active.get(client_id)
         if ws is not None and ws.client_state.name == "CONNECTED":
-            await manager.send_json(client_id, {"type": "TURN_COMPLETE"})
+            # `interrupted` tells the frontend not to speak the half-formed
+            # fragment via its browser-TTS fallback — it would otherwise
+            # overlap with the new turn's real audio (heard as the voice
+            # "restarting mid-paragraph").
+            await manager.send_json(client_id, {"type": "TURN_COMPLETE", "interrupted": interrupted})
 
 
 async def _send_turn(
@@ -303,18 +309,17 @@ async def voice_endpoint(websocket: WebSocket) -> None:
     voice_task: asyncio.Task | None = None
 
     async def cancel_voice_task() -> None:
-        """Cancel an in-flight turn and notify the frontend so isThinking resets."""
+        """Cancel an in-flight turn. run_agent's own finally block always sends
+        TURN_COMPLETE on unwind (including on cancellation), so we must not send
+        a second one here — a duplicate caused the frontend to fire its browser-TTS
+        fallback on the half-formed interrupted text, which then overlapped with
+        the new turn's real audio (heard as the voice "restarting mid-paragraph")."""
         nonlocal voice_task
         if voice_task and not voice_task.done():
             voice_task.cancel()
             try:
                 await voice_task
             except (asyncio.CancelledError, Exception):
-                pass
-            # Notify frontend: previous turn was interrupted — reset thinking state.
-            try:
-                await manager.send_json(client_id, {"type": "TURN_COMPLETE"})
-            except Exception:
                 pass
         voice_task = None
 

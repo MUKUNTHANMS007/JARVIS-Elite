@@ -179,40 +179,52 @@ def resample_audio(audio_data: np.ndarray, orig_sr: int, target_sr: int) -> np.n
     x_target = np.linspace(0, duration, num_target_samples)
     return np.interp(x_target, x_orig, audio_data)
 
+async def _synthesize_chunk(chunk: str, groq_available: bool) -> tuple[bytes | None, bool]:
+    """Synthesize one chunk, trying Groq first then falling back to edge-tts."""
+    audio_bytes: bytes | None = None
+    used_groq = False
+
+    # Per-chunk Groq attempt: do NOT disable Groq session-wide after one
+    # transient error — only skip it for this individual chunk.
+    if groq_available:
+        wav_bytes = await _synthesize_groq(chunk)
+        if wav_bytes:
+            audio_bytes = _wav_to_pcm(wav_bytes)
+            used_groq = True
+
+    if not audio_bytes:
+        audio_bytes = await _synthesize_edge(chunk)
+
+    return audio_bytes, used_groq
+
 async def synthesize_speech_stream(text: str) -> AsyncGenerator[bytes, None]:
     """
     Synthesize speech in sentence chunks.
     - Primary: Groq Orpheus (PCM_16 @ 24 kHz)
     - Fallback: edge-tts (MP3 — browser decodes via decodeAudioData)
+
+    Synthesis of the next chunk is kicked off as soon as the current chunk's
+    audio is ready, so network/synthesis latency overlaps with the time the
+    caller spends sending/playing the previous chunk instead of stacking up.
     """
     cleaned = clean_text(text)
     if not cleaned:
         return
 
+    chunks = [c for c in chunk_text(cleaned) if c.strip()]
+    if not chunks:
+        return
+
     start_time = datetime.now()
-    chunks = chunk_text(cleaned)
     first_byte = True
     groq_available = _get_groq_client() is not None
-    used_groq = False
 
-    for chunk in chunks:
-        if not chunk.strip():
-            continue
+    next_task = asyncio.create_task(_synthesize_chunk(chunks[0], groq_available))
+    for i in range(len(chunks)):
+        audio_bytes, used_groq = await next_task
 
-        audio_bytes: bytes | None = None
-        wav_bytes: bytes | None = None
-
-        # Per-chunk Groq attempt: do NOT disable Groq session-wide after one
-        # transient error — only skip it for this individual chunk.
-        if groq_available:
-            wav_bytes = await _synthesize_groq(chunk)
-            if wav_bytes:
-                audio_bytes = _wav_to_pcm(wav_bytes)
-                used_groq = True
-            # groq_available stays True — next chunk will try Groq again
-
-        if not audio_bytes:
-            audio_bytes = await _synthesize_edge(chunk)
+        if i + 1 < len(chunks):
+            next_task = asyncio.create_task(_synthesize_chunk(chunks[i + 1], groq_available))
 
         if not audio_bytes:
             continue

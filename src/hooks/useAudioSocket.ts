@@ -166,7 +166,10 @@ export function useAudioSocket(url: string): UseJarvisSocketReturn {
 
           case "TURN_COMPLETE":
             setIsThinking(false);
-            if (!audioReceivedThisTurn.current && currentAssistantMsg.current.trim()) {
+            // Skip the browser-TTS fallback for interrupted turns — the
+            // accumulated text is just a half-formed fragment, and speaking
+            // it would overlap with the new turn's real audio.
+            if (!msg.interrupted && !audioReceivedThisTurn.current && currentAssistantMsg.current.trim()) {
               speakWithBrowserTTS(currentAssistantMsg.current);
             }
             currentAssistantMsg.current = "";

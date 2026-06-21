@@ -4,20 +4,24 @@ from dotenv import load_dotenv
 # Ensure env is loaded for direct tool calls
 load_dotenv()
 
-def send_neural_push(title: str, message: str, priority: int = 3) -> str:
+def send_neural_push(title: str, message: str, priority: int = 3, action_label: str = None, action_url: str = None) -> str:
     """
     Sends a persistent push notification to Mukunthan's mobile device via Ntfy.sh.
     Topic: Configurable via .env (Default: JARVIS_MUKUNTHAN_PULSE)
     Priority: 1 (min) to 5 (max). Default 3.
+    action_label/action_url: Optional one-tap deep link (e.g. "Open Gmail", "https://mail.google.com")
+    rendered as a notification action button. Purely a link — JARVIS never acts on your behalf.
     """
     topic = os.getenv("NTFY_TOPIC", "JARVIS_MUKUNTHAN_PULSE")
     url = f"https://ntfy.sh/{topic}"
-    
+
     headers = {
         "Title": title,
         "Priority": str(priority)
     }
-    
+    if action_label and action_url:
+        headers["Actions"] = f"view, {action_label}, {action_url}"
+
     try:
         print(f"[Push Bridge] Dispatching to topic: {topic} (Priority: {priority})")
         # Ntfy handles the message in the body as raw bytes or text

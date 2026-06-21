@@ -45,6 +45,7 @@ from agent.memory import get_active_reminders_db, init_db, get_calendar_events_d
 from services.focus_service import get_focus_session_data
 from services.event_service import focus_connections, broadcast_timer_event
 from services.cache_service import INTELLIGENCE_HUB, update_intelligence, notify_communication, get_intelligence
+from services import sentinel_service
 from models.protocol import NeuralPacket as PydanticPacket, Telemetry as PydanticTelemetry, DashboardMetrics as PydanticDashboard, ProactiveAlert as PydanticAlert
 import models.neural_protocol_pb2 as pb
 from tasks import (
@@ -66,6 +67,7 @@ async def refresh_intelligence_hub():
             try:
                 count = await asyncio.wait_for(asyncio.to_thread(get_unread_count_raw), timeout=15)
                 update_intelligence("gmail_unread", count)
+                await asyncio.to_thread(sentinel_service.check_gmail_sentinel)
             except Exception as e:
                 logger.debug(f"[Neural Hub] Gmail sync drift: {e}")
             await asyncio.sleep(30)
@@ -89,6 +91,7 @@ async def refresh_intelligence_hub():
             try:
                 stats = await get_leetcode_stats(user_lc, sync=True)
                 update_intelligence("leetcode", stats)
+                await sentinel_service.check_leetcode_deadline()
             except Exception as e:
                 logger.debug(f"[Neural Hub] LeetCode sync drift: {e}")
             await asyncio.sleep(300)
@@ -98,6 +101,7 @@ async def refresh_intelligence_hub():
             try:
                 pulse = await asyncio.wait_for(asyncio.to_thread(get_github_pulse), timeout=15)
                 update_intelligence("github", pulse)
+                sentinel_service.check_github_sentinel(pulse)
             except Exception as e:
                 logger.debug(f"[Neural Hub] GitHub pulse drift: {e}")
             await asyncio.sleep(300)
@@ -180,9 +184,10 @@ async def refresh_intelligence_hub():
                 else: # inactive or error
                     update_intelligence("spotify_track", "Inactive")
                     update_intelligence("spotify_image", None)
+                sentinel_service.check_spotify_focus(data)
             except Exception as e:
                 logger.debug(f"[Neural Hub] Spotify sync drift: {e}")
-            await asyncio.sleep(5)
+            await asyncio.sleep(20)
 
     # Spawn all as independent background tasks
     await asyncio.gather(

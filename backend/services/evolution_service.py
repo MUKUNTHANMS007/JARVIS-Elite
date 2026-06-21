@@ -70,7 +70,7 @@ async def get_or_generate_evolution_challenge(language: str = "python"):
     """
 
     try:
-        response = groq_client.chat.completions.create(
+        response = await groq_client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"}
@@ -104,7 +104,7 @@ async def verify_evolution_solution(problem_id: str, user_code: str, language: s
     """
     
     try:
-        response = groq_client.chat.completions.create(
+        response = await groq_client.chat.completions.create(
             model="llama-3.1-8b-instant", # Faster for validation
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"}

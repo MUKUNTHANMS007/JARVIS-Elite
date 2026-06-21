@@ -189,6 +189,42 @@ def get_unread_count_raw() -> int:
         print(f"[Gmail Error] Count sync failed: {e}")
         return 0
 
+def get_new_unread_emails(seen_ids: set, limit: int = 10) -> list:
+    """
+    JARVIS Sentinel: Returns metadata for unread Primary emails NOT already in `seen_ids`.
+    Used for diff-based "new mail arrived" alerts rather than a raw unread count.
+    Each item: {"id", "sender", "subject"}.
+    """
+    try:
+        service = get_gmail_service()
+        if not service:
+            return []
+
+        query = 'label:INBOX is:unread -label:CATEGORY_SOCIAL -label:CATEGORY_PROMOTIONS -label:CATEGORY_UPDATES -label:CATEGORY_FORUMS newer_than:2d'
+        results = service.users().messages().list(userId='me', q=query, maxResults=limit).execute()
+        messages = results.get('messages', [])
+
+        new_items = []
+        for msg in messages:
+            msg_id = msg['id']
+            if msg_id in seen_ids:
+                continue
+            try:
+                m = service.users().messages().get(
+                    userId='me', id=msg_id, format='metadata',
+                    metadataHeaders=['Subject', 'From']
+                ).execute()
+                headers = m['payload']['headers']
+                subject = next((h['value'] for h in headers if h['name'] == 'Subject'), 'No Subject')
+                sender = next((h['value'] for h in headers if h['name'] == 'From'), 'Unknown Sender').split('<')[0].strip()
+                new_items.append({"id": msg_id, "sender": sender, "subject": subject})
+            except Exception:
+                continue
+        return new_items
+    except Exception as e:
+        print(f"[Gmail Sentinel] New mail scan failed: {e}")
+        return []
+
 def get_smart_email_notifications(limit: int = 15) -> str:
     """Forward compatibility alias for the intelligence layer."""
     return get_jarvis_email_briefing()

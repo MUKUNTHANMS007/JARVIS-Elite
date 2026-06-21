@@ -92,7 +92,8 @@ def get_github_pulse(repo_names=None):
                     "stars": repo.stargazers_count,
                     "issues": repo.open_issues_count,
                     "last_commit": (last_commit[:35] + "..") if len(last_commit) > 35 else last_commit,
-                    "sha": commits[0].sha[:7] if commits.totalCount > 0 else None
+                    "sha": commits[0].sha[:7] if commits.totalCount > 0 else None,
+                    "html_url": repo.html_url
                 })
                 print(f"[GitHub Pulse] Successfully synchronized: {name}")
             except GithubException as ge:
