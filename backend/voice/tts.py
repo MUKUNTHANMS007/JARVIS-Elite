@@ -195,6 +195,19 @@ async def _synthesize_chunk(chunk: str, groq_available: bool) -> tuple[bytes | N
     if not audio_bytes:
         audio_bytes = await _synthesize_edge(chunk)
 
+    # Cold-start retry: the first chunk(s) of a session pay full DNS/TLS
+    # handshake cost on both providers, which previously made an early
+    # sentence fail silently (dropped from the stream) while a later
+    # sentence — synthesized once the connection was warm — played fine,
+    # making it sound like JARVIS only spoke the last sentence of a reply.
+    # One retry of the cheaper edge-tts path covers that transient case.
+    if not audio_bytes:
+        logger.warning("[Neural Link] All TTS providers failed for chunk; retrying edge-tts once: %r", chunk[:60])
+        audio_bytes = await _synthesize_edge(chunk)
+
+    if not audio_bytes:
+        logger.error("[Neural Link] TTS retry exhausted — chunk will be silent: %r", chunk[:60])
+
     return audio_bytes, used_groq
 
 async def synthesize_speech_stream(text: str) -> AsyncGenerator[bytes, None]:
@@ -287,9 +300,21 @@ async def synthesize_speech(text: str) -> bytes:
     audio_bytes, _ = await synthesize_speech_payload(text)
     return audio_bytes
 
-def warm_up_tts():
-    """Neural Pre-warming: Bypassed for high-speed client-side SpeechSynthesis."""
-    print("[Neural Link] Cloud TTS Warm-up Bypassed.")
+async def warm_up_tts():
+    """Pre-open the Groq/edge-tts connections with a throwaway synthesis call.
+    Without this, the first real reply of a session pays the full DNS/TLS
+    handshake cost on its first sentence(s) — if that sentence's request times
+    out while later ones (made once the connection is warm) succeed, it sounds
+    like JARVIS only spoke the last sentence of the reply."""
+    try:
+        await asyncio.gather(
+            _synthesize_groq("Online."),
+            _synthesize_edge("Online."),
+            return_exceptions=True,
+        )
+        print("[Neural Link] Cloud TTS connections pre-warmed.")
+    except Exception as e:
+        print(f"[Neural Link] TTS warm-up drift (non-fatal): {e}")
 
 async def close_tts_client():
     """Cleanup logic if models need explicit release."""

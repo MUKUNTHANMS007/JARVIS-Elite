@@ -208,16 +208,16 @@ async def lifespan(app: FastAPI):
     if os.getenv("NEURAL_PREWARM") == "true":
         logger.info("[Neural Link] Igniting Engines... (VRAM Optimization Active)")
         try:
-            # Run warming concurrently to save boot time
-            await asyncio.gather(
-                asyncio.to_thread(warm_up_stt),
-                asyncio.to_thread(warm_up_tts)
-            )
+            await asyncio.to_thread(warm_up_stt)
             logger.info("[Neural Link] RTX 3050 Ti Loaded & Ready.")
         except Exception as e:
             logger.error(f"[Neural Link] Handshake Drift during warming: {e}")
 
     # --- NON-BLOCKING BOOT: Prevent Supabase/Net hangs from blocking port 8000 ---
+    # Cloud TTS warm-up is a cheap network handshake (unlike the gated local-model
+    # warming above) so it always runs — it's what stops the first reply of a
+    # session from dropping its opening sentence(s) to a cold-start timeout.
+    asyncio.create_task(warm_up_tts())
     asyncio.create_task(init_db())
     hub_task = asyncio.create_task(refresh_intelligence_hub())
     logger.info("[Neural Core] Unified Intelligence Online.")
