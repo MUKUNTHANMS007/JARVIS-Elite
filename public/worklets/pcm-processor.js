@@ -4,9 +4,14 @@
 class PCMProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
-    // Capacity for 4 seconds of audio based on hardware sample rate
+    // Capacity for 120 seconds of audio based on hardware sample rate.
+    // Backend TTS synthesis runs faster than real-time playback, so a
+    // multi-sentence reply's audio can arrive well before the speaker has
+    // drained the previous sentence. A too-small buffer here forces the
+    // overflow safety net below to fire and wipe still-unplayed audio
+    // mid-reply — heard as JARVIS only speaking the last sentence.
     const rate = typeof sampleRate !== 'undefined' ? sampleRate : 24000;
-    this.bufferCapacity = rate * 4;
+    this.bufferCapacity = rate * 120;
     this.buffer = new Float32Array(this.bufferCapacity);
     this.writePointer = 0;
     this.readPointer = 0;
@@ -38,11 +43,16 @@ class PCMProcessor extends AudioWorkletProcessor {
       this.writePointer = samplesQueued;
     }
 
-    // Safety: If it still doesn't fit after shifting, drop oldest samples and reset
+    // Safety: if the queued backlog plus the new chunk still can't fit even
+    // after compaction, drop the OLDEST queued samples (not the new ones) —
+    // a full reset here would silently discard unplayed audio mid-reply.
     if (this.writePointer + newData.length > this.bufferCapacity) {
+      const overflow = (this.writePointer + newData.length) - this.bufferCapacity;
       console.warn('[Neural Audio] Buffer overflow even after shift. Dropping oldest samples.');
+      this.readPointer = Math.min(this.readPointer + overflow, this.writePointer);
+      this.buffer.copyWithin(0, this.readPointer, this.writePointer);
+      this.writePointer -= this.readPointer;
       this.readPointer = 0;
-      this.writePointer = 0;
     }
 
     // Final hard-clamp: should never trigger, but prevents any out-of-bounds write

@@ -29,11 +29,20 @@ export function useVision() {
             }
 
             if (videoRef.current) {
-                videoRef.current.srcObject = stream;
-                // Ensure video plays once metadata is loaded
-                videoRef.current.onloadedmetadata = () => {
-                    videoRef.current?.play();
-                };
+                const video = videoRef.current;
+                video.srcObject = stream;
+                // Wait for real frame data (not just metadata) so captureFrame()
+                // never fires against a zero-dimension video right after enabling vision.
+                await new Promise<void>((resolve) => {
+                    video.onloadedmetadata = () => {
+                        video.play();
+                    };
+                    if (video.readyState >= video.HAVE_CURRENT_DATA) {
+                        resolve();
+                        return;
+                    }
+                    video.onloadeddata = () => resolve();
+                });
             }
 
             streamRef.current = stream;

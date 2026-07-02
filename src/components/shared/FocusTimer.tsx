@@ -12,7 +12,7 @@ export function FocusTimer({ initialMinutes = 25, onComplete, externalEvent }: F
   const [secondsLeft, setSecondsLeft] = useState(initialMinutes * 60);
   const [isActive, setIsActive] = useState(false);
   const [totalDuration, setTotalDuration] = useState(initialMinutes * 60);
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     if (externalEvent) {

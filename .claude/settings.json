@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm -v)",
+      "Bash(npx --yes create-expo-app@latest jarvis-mobile-scaffold --template blank-typescript)"
+    ]
+  }
+}

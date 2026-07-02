@@ -1,30 +1,87 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { 
-  StyleSheet, Text, View, TouchableOpacity, 
-  Dimensions, Animated, StatusBar, ScrollView,
-  Modal, TextInput, Alert
+import {
+  StyleSheet, Text, View, TouchableOpacity,
+  Animated, StatusBar, ScrollView,
+  Modal, TextInput, Alert,
 } from 'react-native';
-import { Audio } from 'expo-av';
+import {
+  useAudioRecorder,
+  useAudioRecorderState,
+  RecordingPresets,
+  requestRecordingPermissionsAsync,
+  setAudioModeAsync,
+  createAudioPlayer,
+  type AudioPlayer,
+} from 'expo-audio';
 import * as FileSystem from 'expo-file-system/legacy';
-import * as Notifications from 'expo-notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { 
-  Mic, MicOff, Zap, Code, 
-  BookOpen, Activity, Settings, 
-  MessageSquare, Music 
-} from 'lucide-react-native';
+import { MaterialIcons } from '@expo/vector-icons';
+import { useFonts, SpaceGrotesk_600SemiBold, SpaceGrotesk_700Bold } from '@expo-google-fonts/space-grotesk';
+import { Inter_400Regular, Inter_500Medium, Inter_700Bold, Inter_800ExtraBold } from '@expo-google-fonts/inter';
 
-const { width } = Dimensions.get('window');
 const VAD_THRESHOLD = -45; // dB
 const SILENCE_DURATION = 800; // ms
 
+// JARVIS design tokens — matches the desktop app's Material-derived palette (src/index.css)
+const COLORS = {
+  background: '#f9f9fb',
+  surfaceLowest: '#ffffff',
+  surfaceLow: '#f3f3f5',
+  surfaceContainer: '#eeeef0',
+  surfaceHigh: '#e8e8ea',
+  onSurface: '#1a1c1d',
+  onSurfaceVariant: '#474747',
+  secondary: '#5e5e63',
+  outline: '#c6c6c6',
+  primary: '#000000',
+  accent: '#4a8fff',
+  emerald: '#059669',
+  amber: '#d97706',
+  rose: '#e11d48',
+  indigo: '#4f46e5',
+};
+
+// backendHost may be a bare LAN address ("192.168.1.5:8000") or a full
+// tunnel URL ("https://xxxx.trycloudflare.com"). Derive http(s)/ws(s) bases from it.
+const getHttpBase = (host: string): string => {
+  if (host.startsWith('https://') || host.startsWith('http://')) {
+    return host.replace(/\/$/, '');
+  }
+  return `http://${host}`;
+};
+
+const getWsBase = (host: string): string => {
+  if (host.startsWith('https://')) return `wss://${host.slice('https://'.length).replace(/\/$/, '')}`;
+  if (host.startsWith('http://')) return `ws://${host.slice('http://'.length).replace(/\/$/, '')}`;
+  return `ws://${host}`;
+};
+
+const getGreeting = (): string => {
+  const hour = new Date().getHours();
+  if (hour >= 5 && hour < 12) return "Good Morning, Sir.";
+  if (hour >= 12 && hour < 17) return "Good Afternoon, Sir.";
+  if (hour >= 17 && hour < 22) return "Good Evening, Sir.";
+  return "Night Owl Protocol, Sir?";
+};
+
+const WAVE_HEIGHTS = [12, 16, 8, 24, 14, 32, 10, 20, 6, 14, 18];
+
 export default function App() {
+  const [fontsLoaded] = useFonts({
+    SpaceGrotesk_600SemiBold,
+    SpaceGrotesk_700Bold,
+    Inter_400Regular,
+    Inter_500Medium,
+    Inter_700Bold,
+    Inter_800ExtraBold,
+  });
+
   const [isConnected, setIsConnected] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
-  const [lastTranscript, setLastTranscript] = useState("Standing by...");
+  const [lastTranscript, setLastTranscript] = useState('"Ready for placement audit..."');
   const [lastAssistantText, setLastAssistantText] = useState("");
-  
+
   // Configuration & Dynamic Telemetry States
   const [backendHost, setBackendHost] = useState("192.168.1.5:8000");
   const [hostInput, setHostInput] = useState("192.168.1.5:8000");
@@ -38,13 +95,15 @@ export default function App() {
   const [focusHours, setFocusHours] = useState(4.2);
   const [spotifyTrack, setSpotifyTrack] = useState("Lo-Fi Beats");
   const [spotifyStatus, setSpotifyStatus] = useState("Now Playing");
-  
-  const pulseAnim = useRef(new Animated.Value(1)).current;
+
+  const waveAnims = useRef(WAVE_HEIGHTS.map(() => new Animated.Value(1))).current;
   const socketRef = useRef<WebSocket | null>(null);
-  const recordingRef = useRef<Audio.Recording | null>(null);
-  const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const assistantTextRef = useRef("");
-  const soundRef = useRef<Audio.Sound | null>(null);
+  const soundRef = useRef<AudioPlayer | null>(null);
+
+  const audioRecorder = useAudioRecorder({ ...RecordingPresets.HIGH_QUALITY, isMeteringEnabled: true });
+  const recorderState = useAudioRecorderState(audioRecorder, 200);
 
   // --- Load backend config ---
   useEffect(() => {
@@ -56,18 +115,23 @@ export default function App() {
     });
   }, []);
 
-  // --- Neural Pulse Animation ---
+  // --- Voice waveform animation ---
   useEffect(() => {
-    if (isRecording || isThinking) {
+    const active = isRecording || isThinking;
+    const loops = waveAnims.map((anim, i) =>
       Animated.loop(
         Animated.sequence([
-          Animated.timing(pulseAnim, { toValue: 1.2, duration: 800, useNativeDriver: true }),
-          Animated.timing(pulseAnim, { toValue: 1, duration: 800, useNativeDriver: true }),
+          Animated.timing(anim, { toValue: active ? 0.3 : 1, duration: 300 + i * 60, useNativeDriver: true }),
+          Animated.timing(anim, { toValue: active ? 1.4 : 1, duration: 300 + i * 60, useNativeDriver: true }),
         ])
-      ).start();
+      )
+    );
+    if (active) {
+      loops.forEach((loop) => loop.start());
     } else {
-      pulseAnim.setValue(1);
+      waveAnims.forEach((anim) => anim.setValue(1));
     }
+    return () => loops.forEach((loop) => loop.stop());
   }, [isRecording, isThinking]);
 
   const blobToBase64 = async (blob: Blob): Promise<string> => {
@@ -90,11 +154,11 @@ export default function App() {
 
     try {
       if (soundRef.current) {
-        await soundRef.current.unloadAsync();
+        soundRef.current.remove();
         soundRef.current = null;
       }
 
-      const response = await fetch(`http://${backendHost}/api/voice/speak`, {
+      const response = await fetch(`${getHttpBase(backendHost)}/api/voice/speak`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text }),
@@ -112,13 +176,14 @@ export default function App() {
         encoding: FileSystem.EncodingType.Base64,
       });
 
-      const { sound } = await Audio.Sound.createAsync({ uri: fileUri }, { shouldPlay: true });
-      soundRef.current = sound;
-      sound.setOnPlaybackStatusUpdate((status: any) => {
+      const player = createAudioPlayer(fileUri);
+      soundRef.current = player;
+      player.play();
+      player.addListener('playbackStatusUpdate', (status) => {
         if (status?.didJustFinish) {
-          sound.unloadAsync().catch(() => {});
+          player.remove();
           FileSystem.deleteAsync(fileUri, { idempotent: true }).catch(() => {});
-          if (soundRef.current === sound) {
+          if (soundRef.current === player) {
             soundRef.current = null;
           }
         }
@@ -133,7 +198,7 @@ export default function App() {
     connectWS();
     return () => {
       socketRef.current?.close();
-      soundRef.current?.unloadAsync().catch(() => {});
+      soundRef.current?.remove();
     };
   }, [backendHost]);
 
@@ -141,7 +206,7 @@ export default function App() {
     if (socketRef.current) {
       socketRef.current.close();
     }
-    const wsUrl = `ws://${backendHost}/ws/voice`;
+    const wsUrl = `${getWsBase(backendHost)}/ws/voice`;
     const ws = new WebSocket(wsUrl);
     ws.onopen = () => setIsConnected(true);
     ws.onclose = () => {
@@ -182,18 +247,18 @@ export default function App() {
   // --- Live Sync Telemetry ---
   const fetchSyncData = async () => {
     try {
-      const res = await fetch(`http://${backendHost}/api/sync`);
+      const res = await fetch(`${getHttpBase(backendHost)}/api/sync`);
       if (res.ok) {
         const data = await res.json();
         const intel = data.intelligence || {};
         const leetcode = intel.leetcode || {};
         if (leetcode.streak !== undefined) setLeetcodeStreak(leetcode.streak);
         if (leetcode.total_solved !== undefined) setLeetcodeSolved(leetcode.total_solved);
-        
+
         if (data.focus?.deep_work_hours !== undefined) {
           setFocusHours(data.focus.deep_work_hours);
         }
-        
+
         const track = intel.spotify_track;
         if (track) {
           setSpotifyTrack(track);
@@ -224,60 +289,48 @@ export default function App() {
   }, [backendHost]);
 
   // --- Voice Pipeline with VAD ---
+  // Guards against rapid re-entrant start/stop calls (e.g. quick repeated taps) racing
+  // against the native recorder's async teardown, which otherwise throws IllegalStateException.
+  const recordingOpRef = useRef(false);
+
   const startRecording = async () => {
+    if (recordingOpRef.current || audioRecorder.isRecording) return;
+    recordingOpRef.current = true;
     try {
-      const permission = await Audio.requestPermissionsAsync();
+      const permission = await requestRecordingPermissionsAsync();
       if (!permission.granted) {
         Alert.alert("Permission Required", "Microphone access is required to speak with JARVIS.");
         return;
       }
 
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
+      await setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
       });
 
-      const { recording } = await Audio.Recording.createAsync(
-        {
-          ...Audio.RecordingOptionsPresets.HIGH_QUALITY,
-          isMeteringEnabled: true,
-        }
-      );
-      
-      recordingRef.current = recording;
+      if (!audioRecorder.getStatus().canRecord) {
+        await audioRecorder.prepareToRecordAsync();
+      }
+      audioRecorder.record();
       setIsRecording(true);
-
-      recording.setOnRecordingStatusUpdate((status) => {
-        if (status.metering !== undefined) {
-          if (status.metering > VAD_THRESHOLD) {
-            if (silenceTimerRef.current) {
-              clearTimeout(silenceTimerRef.current);
-              silenceTimerRef.current = null;
-            }
-          } else {
-            if (!silenceTimerRef.current) {
-              silenceTimerRef.current = setTimeout(stopRecording, SILENCE_DURATION);
-            }
-          }
-        }
-      });
-
     } catch (err) {
       console.error('Failed to start recording', err);
       Alert.alert("Recording Failed", `Microphone error: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      recordingOpRef.current = false;
     }
   };
 
   const stopRecording = async () => {
-    if (!recordingRef.current) return;
-    
+    if (recordingOpRef.current || !audioRecorder.isRecording) return;
+    recordingOpRef.current = true;
+
     setIsRecording(false);
     if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
 
     try {
-      await recordingRef.current.stopAndUnloadAsync();
-      const uri = recordingRef.current.getURI();
-      recordingRef.current = null;
+      await audioRecorder.stop();
+      const uri = audioRecorder.uri;
 
       if (uri && socketRef.current?.readyState === WebSocket.OPEN) {
         const response = await fetch(uri);
@@ -299,6 +352,20 @@ export default function App() {
     }
   };
 
+  // --- Voice Activity Detection: auto-stop on sustained silence ---
+  useEffect(() => {
+    if (!isRecording || recorderState.metering === undefined) return;
+
+    if (recorderState.metering > VAD_THRESHOLD) {
+      if (silenceTimerRef.current) {
+        clearTimeout(silenceTimerRef.current);
+        silenceTimerRef.current = null;
+      }
+    } else if (!silenceTimerRef.current) {
+      silenceTimerRef.current = setTimeout(stopRecording, SILENCE_DURATION);
+    }
+  }, [recorderState.metering, isRecording]);
+
   const handleSaveSettings = async () => {
     try {
       await AsyncStorage.setItem("BACKEND_HOST", hostInput);
@@ -310,71 +377,105 @@ export default function App() {
     }
   };
 
+  const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+  const voiceLabel = isRecording ? 'Capturing Vectors...' : isThinking ? 'Processing...' : 'Neural Link Session';
+  const voiceLine = lastAssistantText || lastTranscript;
+
+  if (!fontsLoaded) {
+    return <View style={styles.container} />;
+  }
+
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="light-content" />
-      
-      {/* Header */}
-      <View style={styles.header}>
-        <View>
-          <Text style={styles.greeting}>Good Morning,</Text>
-          <Text style={styles.userName}>Mukunthan</Text>
-        </View>
-        <TouchableOpacity style={styles.settingsBtn} onPress={() => setShowSettings(true)}>
-          <Settings size={20} color="#fff" />
-        </TouchableOpacity>
-      </View>
+      <StatusBar barStyle="dark-content" backgroundColor={COLORS.background} />
 
-      {/* Neural Heart Section */}
-      <View style={styles.heartSection}>
-        <Animated.View style={[styles.pulseCircle, { transform: [{ scale: pulseAnim }] }]}>
-          <TouchableOpacity 
-            style={[styles.mainOrb, isRecording && styles.activeOrb]} 
-            onLongPress={startRecording}
-            onPressOut={stopRecording}
-          >
-            {isRecording ? <Mic size={40} color="#fff" /> : <Zap size={40} color="#00d2ff" />}
+      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        {/* Header */}
+        <View style={styles.header}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.dateLabel}>{today.toUpperCase()}</Text>
+            <Text style={styles.greeting}>{getGreeting()}</Text>
+          </View>
+          <TouchableOpacity style={styles.settingsBtn} onPress={() => setShowSettings(true)}>
+            <MaterialIcons name="settings" size={20} color={COLORS.onSurface} />
           </TouchableOpacity>
-        </Animated.View>
-        <Text style={styles.statusText}>{isConnected ? "NEURAL LINK ACTIVE" : "SYNCING..."}</Text>
-        <Text style={styles.transcriptText}>{lastAssistantText || lastTranscript}</Text>
-      </View>
+        </View>
 
-      {/* Bento Grid */}
-      <ScrollView contentContainerStyle={styles.gridContainer} showsVerticalScrollIndicator={false}>
+        {/* Voice Visualization Plate */}
+        <TouchableOpacity
+          activeOpacity={0.85}
+          style={styles.voicePlate}
+          onLongPress={startRecording}
+          onPressOut={stopRecording}
+        >
+          <View style={styles.waveRow}>
+            {WAVE_HEIGHTS.map((h, i) => (
+              <Animated.View
+                key={i}
+                style={[
+                  styles.waveBar,
+                  {
+                    height: h,
+                    backgroundColor: isRecording || isThinking ? COLORS.accent : COLORS.primary,
+                    transform: [{ scaleY: waveAnims[i] }],
+                  },
+                ]}
+              />
+            ))}
+          </View>
+          <View style={styles.voiceTextCol}>
+            <Text style={styles.voiceLabel}>{voiceLabel}</Text>
+            <Text style={styles.voiceLine} numberOfLines={1}>{voiceLine}</Text>
+          </View>
+        </TouchableOpacity>
+
+        <View style={styles.connectionRow}>
+          <View style={[styles.dot, { backgroundColor: isConnected ? COLORS.emerald : COLORS.rose }]} />
+          <Text style={styles.connectionText}>{isConnected ? 'Neural Link Active' : 'Syncing...'}</Text>
+        </View>
+
+        {/* Bento Grid */}
         <View style={styles.gridRow}>
-          <View style={[styles.card, { flex: 1.5, backgroundColor: '#121212' }]}>
-            <Code size={24} color="#00d2ff" />
-            <Text style={styles.cardTitle}>LeetCode</Text>
-            <Text style={styles.cardVal}>{leetcodeStreak} Day Streak</Text>
+          <View style={[styles.card, { flex: 1.4 }]}>
+            <View style={[styles.iconChip, { backgroundColor: '#eef2ff' }]}>
+              <MaterialIcons name="code" size={20} color={COLORS.indigo} />
+            </View>
+            <Text style={styles.cardLabel}>LEETCODE MASTERY</Text>
+            <Text style={styles.cardValue}>{leetcodeStreak} Day Streak</Text>
             <Text style={styles.cardSub}>{leetcodeSolved} Solved</Text>
           </View>
-          <View style={[styles.card, { flex: 1, backgroundColor: '#1a1a1a' }]}>
-            <BookOpen size={24} color="#a855f7" />
-            <Text style={styles.cardTitle}>Exams</Text>
-            <Text style={styles.cardVal}>{examDay}</Text>
+          <View style={[styles.card, { flex: 1 }]}>
+            <View style={[styles.iconChip, { backgroundColor: '#fff7ed' }]}>
+              <MaterialIcons name="menu-book" size={20} color={COLORS.amber} />
+            </View>
+            <Text style={styles.cardLabel}>EXAM RADAR</Text>
+            <Text style={styles.cardValue}>{examDay}</Text>
             <Text style={styles.cardSub}>{examName}</Text>
           </View>
         </View>
 
         <View style={styles.gridRow}>
-          <View style={[styles.card, { flex: 1, backgroundColor: '#1a1a1a' }]}>
-            <Activity size={24} color="#22c55e" />
-            <Text style={styles.cardTitle}>Focus</Text>
-            <Text style={styles.cardVal}>{focusHours}h</Text>
-            <Text style={styles.cardSub}>Deep Work</Text>
+          <View style={[styles.card, { flex: 1 }]}>
+            <View style={[styles.iconChip, { backgroundColor: '#ecfdf5' }]}>
+              <MaterialIcons name="show-chart" size={20} color={COLORS.emerald} />
+            </View>
+            <Text style={styles.cardLabel}>DEEP WORK</Text>
+            <Text style={styles.cardValue}>{focusHours}h</Text>
+            <Text style={styles.cardSub}>Accumulated Today</Text>
           </View>
-          <View style={[styles.card, { flex: 1.5, backgroundColor: '#121212' }]}>
-            <Music size={24} color="#ec4899" />
-            <Text style={styles.cardTitle}>Spotify</Text>
-            <Text style={styles.cardVal}>{spotifyStatus}</Text>
+          <View style={[styles.card, { flex: 1.4 }]}>
+            <View style={[styles.iconChip, { backgroundColor: '#fdf2f8' }]}>
+              <MaterialIcons name="music-note" size={20} color={COLORS.rose} />
+            </View>
+            <Text style={styles.cardLabel}>AUDIO LINK</Text>
+            <Text style={styles.cardValue}>{spotifyStatus}</Text>
             <Text style={styles.cardSub}>{spotifyTrack}</Text>
           </View>
         </View>
 
         <TouchableOpacity style={styles.fullCard}>
-          <MessageSquare size={20} color="#fff" style={{marginRight: 10}} />
-          <Text style={styles.fullCardText}>View Discussion History</Text>
+          <MaterialIcons name="forum" size={18} color={COLORS.surfaceLowest} style={{ marginRight: 10 }} />
+          <Text style={styles.fullCardText}>VIEW DISCUSSION HISTORY</Text>
         </TouchableOpacity>
       </ScrollView>
 
@@ -387,32 +488,32 @@ export default function App() {
       >
         <View style={styles.modalOverlay}>
           <View style={styles.modalContainer}>
-            <Text style={styles.modalTitle}>JARVIS COGNITIVE HOST</Text>
-            <Text style={styles.modalLabel}>Enter core server IP / Host:</Text>
+            <Text style={styles.modalTitle}>JARVIS Cognitive Host</Text>
+            <Text style={styles.modalLabel}>Core server: LAN "ip:port" or tunnel "https://xxx.trycloudflare.com"</Text>
             <TextInput
               style={styles.modalInput}
               value={hostInput}
               onChangeText={setHostInput}
-              placeholder="192.168.1.5:8000"
-              placeholderTextColor="#666"
+              placeholder="192.168.1.5:8000 or https://xxx.trycloudflare.com"
+              placeholderTextColor={COLORS.outline}
               autoCapitalize="none"
               autoCorrect={false}
             />
             <View style={styles.modalActions}>
-              <TouchableOpacity 
-                style={[styles.modalBtn, styles.cancelBtn]} 
+              <TouchableOpacity
+                style={[styles.modalBtn, styles.cancelBtn]}
                 onPress={() => {
                   setHostInput(backendHost);
                   setShowSettings(false);
                 }}
               >
-                <Text style={styles.btnText}>CANCEL</Text>
+                <Text style={styles.cancelBtnText}>CANCEL</Text>
               </TouchableOpacity>
-              <TouchableOpacity 
-                style={[styles.modalBtn, styles.saveBtn]} 
+              <TouchableOpacity
+                style={[styles.modalBtn, styles.saveBtn]}
                 onPress={handleSaveSettings}
               >
-                <Text style={[styles.btnText, { color: '#000', fontWeight: 'bold' }]}>SAVE HOST</Text>
+                <Text style={styles.saveBtnText}>SAVE HOST</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -425,162 +526,199 @@ export default function App() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#000',
+    backgroundColor: COLORS.background,
+  },
+  scrollContent: {
     paddingHorizontal: 20,
     paddingTop: 60,
+    paddingBottom: 40,
   },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 40,
+    alignItems: 'flex-start',
+    marginBottom: 32,
+  },
+  dateLabel: {
+    color: COLORS.secondary,
+    fontSize: 11,
+    fontFamily: 'Inter_700Bold',
+    letterSpacing: 2,
+    marginBottom: 8,
   },
   greeting: {
-    color: '#666',
-    fontSize: 14,
-    fontWeight: '500',
-  },
-  userName: {
-    color: '#fff',
-    fontSize: 24,
-    fontWeight: 'bold',
+    color: COLORS.onSurface,
+    fontSize: 30,
+    fontFamily: 'SpaceGrotesk_700Bold',
+    letterSpacing: -0.5,
   },
   settingsBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#1a1a1a',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: COLORS.surfaceLowest,
     justifyContent: 'center',
     alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    elevation: 2,
   },
-  heartSection: {
+  voicePlate: {
+    backgroundColor: COLORS.surfaceLowest,
+    borderRadius: 24,
+    padding: 24,
+    flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 40,
+    minHeight: 100,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    elevation: 2,
   },
-  pulseCircle: {
-    width: 140,
-    height: 140,
-    borderRadius: 70,
-    backgroundColor: 'rgba(0, 210, 255, 0.05)',
-    justifyContent: 'center',
-    alignItems: 'center',
+  waveRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 4,
+    marginRight: 20,
+    height: 36,
   },
-  mainOrb: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    backgroundColor: '#1a1a1a',
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#333',
-    elevation: 10,
-    shadowColor: '#00d2ff',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.3,
-    shadowRadius: 20,
+  waveBar: {
+    width: 3,
+    borderRadius: 2,
   },
-  activeOrb: {
-    backgroundColor: '#00d2ff',
-    borderColor: '#fff',
+  voiceTextCol: {
+    flex: 1,
+    borderLeftWidth: 1,
+    borderLeftColor: COLORS.surfaceContainer,
+    paddingLeft: 16,
   },
-  statusText: {
-    color: '#00d2ff',
+  voiceLabel: {
+    color: COLORS.secondary,
     fontSize: 10,
-    fontWeight: 'bold',
-    letterSpacing: 2,
-    marginTop: 20,
+    fontFamily: 'Inter_700Bold',
+    letterSpacing: 1.5,
+    marginBottom: 4,
   },
-  transcriptText: {
-    color: '#999',
+  voiceLine: {
+    color: COLORS.onSurface,
     fontSize: 14,
+    fontFamily: 'Inter_500Medium',
     fontStyle: 'italic',
-    marginTop: 10,
-    textAlign: 'center',
   },
-  gridContainer: {
-    paddingBottom: 40,
+  connectionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 16,
+    marginBottom: 32,
+    alignSelf: 'center',
+  },
+  dot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  connectionText: {
+    color: COLORS.secondary,
+    fontSize: 10,
+    fontFamily: 'Inter_700Bold',
+    letterSpacing: 1.5,
+    textTransform: 'uppercase',
   },
   gridRow: {
     flexDirection: 'row',
-    gap: 15,
-    marginBottom: 15,
+    gap: 12,
+    marginBottom: 12,
   },
   card: {
+    backgroundColor: COLORS.surfaceLowest,
     padding: 20,
     borderRadius: 24,
-    borderWidth: 1,
-    borderColor: '#222',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    elevation: 1,
   },
-  cardTitle: {
-    color: '#666',
-    fontSize: 12,
-    fontWeight: 'bold',
-    marginTop: 15,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
+  iconChip: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 14,
   },
-  cardVal: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginTop: 5,
+  cardLabel: {
+    color: COLORS.secondary,
+    fontSize: 9,
+    fontFamily: 'Inter_700Bold',
+    letterSpacing: 1.2,
+    marginBottom: 6,
+  },
+  cardValue: {
+    color: COLORS.onSurface,
+    fontSize: 17,
+    fontFamily: 'SpaceGrotesk_600SemiBold',
   },
   cardSub: {
-    color: '#444',
-    fontSize: 12,
+    color: COLORS.secondary,
+    fontSize: 11,
+    fontFamily: 'Inter_400Regular',
     marginTop: 2,
   },
   fullCard: {
-    backgroundColor: '#1a1a1a',
-    padding: 20,
+    backgroundColor: COLORS.primary,
+    paddingVertical: 18,
     borderRadius: 20,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 10,
+    marginTop: 4,
   },
   fullCardText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
+    color: COLORS.surfaceLowest,
+    fontSize: 11,
+    fontFamily: 'Inter_700Bold',
+    letterSpacing: 1.5,
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.85)',
+    backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'center',
     alignItems: 'center',
+    paddingHorizontal: 24,
   },
   modalContainer: {
-    width: width * 0.85,
-    backgroundColor: '#111',
+    width: '100%',
+    backgroundColor: COLORS.surfaceLowest,
     borderRadius: 28,
     padding: 24,
-    borderWidth: 1,
-    borderColor: '#333',
   },
   modalTitle: {
-    color: '#00d2ff',
-    fontSize: 16,
-    fontWeight: 'bold',
+    color: COLORS.onSurface,
+    fontSize: 18,
+    fontFamily: 'SpaceGrotesk_700Bold',
     textAlign: 'center',
-    letterSpacing: 1.5,
     marginBottom: 20,
   },
   modalLabel: {
-    color: '#aaa',
+    color: COLORS.secondary,
     fontSize: 12,
+    fontFamily: 'Inter_400Regular',
     marginBottom: 8,
+    lineHeight: 17,
   },
   modalInput: {
-    backgroundColor: '#222',
-    color: '#fff',
-    borderRadius: 12,
+    backgroundColor: COLORS.surfaceLow,
+    color: COLORS.onSurface,
+    borderRadius: 14,
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingVertical: 14,
     fontSize: 14,
-    borderWidth: 1,
-    borderColor: '#444',
+    fontFamily: 'Inter_400Regular',
     marginBottom: 24,
   },
   modalActions: {
@@ -590,21 +728,26 @@ const styles = StyleSheet.create({
   },
   modalBtn: {
     flex: 1,
-    paddingVertical: 14,
-    borderRadius: 12,
+    paddingVertical: 16,
+    borderRadius: 14,
     alignItems: 'center',
   },
   cancelBtn: {
-    backgroundColor: '#1a1a1a',
-    borderWidth: 1,
-    borderColor: '#333',
+    backgroundColor: COLORS.surfaceLow,
+  },
+  cancelBtnText: {
+    fontSize: 11,
+    fontFamily: 'Inter_700Bold',
+    letterSpacing: 1,
+    color: COLORS.onSurface,
   },
   saveBtn: {
-    backgroundColor: '#00d2ff',
+    backgroundColor: COLORS.accent,
   },
-  btnText: {
-    fontSize: 12,
+  saveBtnText: {
+    fontSize: 11,
+    fontFamily: 'Inter_700Bold',
     letterSpacing: 1,
-    color: '#fff',
+    color: COLORS.surfaceLowest,
   },
 });

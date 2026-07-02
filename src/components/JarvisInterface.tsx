@@ -374,6 +374,23 @@ export function JarvisInterface({
         ))}
       </nav>
       
+      {/* --- GLOBAL VOICE MIC BUTTON --- */}
+      {/* Available on every page, not just Dashboard/Core, so voice input always has an entry point. */}
+      <button
+        onClick={isRecording ? handleStopRecording : handleStartRecording}
+        disabled={!isConnected}
+        title={isRecording ? "Stop listening" : "Talk to JARVIS"}
+        className={`fixed bottom-28 md:bottom-10 right-6 md:right-10 z-50 w-16 h-16 rounded-full flex items-center justify-center shadow-[0_8px_32px_rgba(0,0,0,0.2)] transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
+          isRecording
+            ? 'bg-red-500 text-white scale-110 animate-pulse'
+            : 'bg-zinc-900 text-white hover:scale-105'
+        }`}
+      >
+        <span className="material-symbols-outlined text-2xl">
+          {isRecording ? 'stop' : 'mic'}
+        </span>
+      </button>
+
       {/* --- NEURAL OPTICS PERSISTENCE LAYER --- */}
       {/* Globally persistent, hidden video element ensures vision works across all pages. */}
       <div className="fixed -bottom-[1000px] -left-[1000px] w-1 h-1 overflow-hidden pointer-events-none opacity-0">
